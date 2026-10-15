@@ -65,11 +65,7 @@ func FinishInfo(text string, info Info, stamp bool, e InfoEdit) (string, error) 
 	comments := func(drop []bool) bool { return e.Values(f.joinWithout(drop)) == base }
 
 	named := false
-	for i := range f.lines {
-		n, ok := formatNumber(f.trimmed(i), e.Major)
-		if !ok || n == 0 || !comments(span(len(f.lines), i, i+1)) {
-			continue
-		}
+	for _, n := range formatsNamed(f, e, base) {
 		switch {
 		case n > e.Major:
 			return "", &Error{Kind: ErrTooNew, Msg: fmt.Sprintf("the file names format %d", n)}
@@ -120,6 +116,41 @@ func FinishInfo(text string, info Info, stamp bool, e InfoEdit) (string, error) 
 		return "", &Error{Kind: ErrRefused, Msg: "the file ends in a raw block that never closes"}
 	}
 	return bom + out, nil
+}
+
+// FormatIn is the format text's Format line names, or 0, for an adapter
+// whose shcl doesn't read the line. It reads it as shcl 3.0 does, and a line
+// in a raw body is the body's. Of several, the first naming major or newer
+// wins, or else the highest.
+func FormatIn(text string, e InfoEdit) int {
+	text = strings.TrimPrefix(text, "\ufeff")
+	// Most files have none, and every Open asks.
+	if !strings.Contains(text, formatWord) {
+		return 0
+	}
+	highest := 0
+	for _, n := range formatsNamed(splitInfoLines(text), e, e.Values(text)) {
+		if n >= e.Major {
+			return n
+		}
+		highest = max(highest, n)
+	}
+	return highest
+}
+
+// formatsNamed is the number on each Format line that counts, in order. A
+// line counts when taking it out leaves the values at base, so one in a raw
+// body doesn't.
+func formatsNamed(f *infoLines, e InfoEdit, base string) []int {
+	var named []int
+	for i := range f.lines {
+		n, ok := formatNumber(f.trimmed(i), e.Major)
+		if !ok || n == 0 || e.Values(f.joinWithout(span(len(f.lines), i, i+1))) != base {
+			continue
+		}
+		named = append(named, n)
+	}
+	return named
 }
 
 // formatNumber reads a Format line as shcl 3.0 does: the head, then digits

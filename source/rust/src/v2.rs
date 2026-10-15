@@ -111,9 +111,10 @@ pub fn open_with(path: &str, level: Strictness) -> Result<Doc, Error> {
 	parse_with(&text, level).map_err(|e| e.path(path))
 }
 
-/// The format a file's Format line names, or 0 with none.
+/// The format a file's Format line names, or 0 with none. One in a raw
+/// body is the body's.
 pub fn format_of(text: &str) -> u32 {
-	crate::scan_format(text)
+	crate::format_in(text, &info_edit())
 }
 
 /// Nothing to convert in 2.0. Hands the text back, refuses a file newer

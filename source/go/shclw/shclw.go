@@ -737,25 +737,6 @@ func bareChar(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_'
 }
 
-const formatHead = "##    Format   "
-
-// ScanFormat is the number a `##    Format   N` line names, or 0. It's for
-// adapters whose shcl predates the Format line, so they can refuse a newer
-// file rather than misread it.
-func ScanFormat(text string) int {
-	for _, line := range strings.Split(text, "\n") {
-		rest, ok := strings.CutPrefix(strings.TrimRight(line, "\r"), formatHead)
-		if !ok {
-			continue
-		}
-		n, err := strconv.Atoi(strings.TrimSpace(rest))
-		if err == nil && n > 0 {
-			return n
-		}
-	}
-	return 0
-}
-
 // ReadText reads a whole file, with a missing file as ErrNotFound. A file
 // that isn't valid UTF-8 is ErrIO, since no shcl version reads one right.
 func ReadText(path string) (string, error) {

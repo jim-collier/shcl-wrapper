@@ -93,6 +93,19 @@ func TestOpen(t *testing.T) {
 	if _, err := shclw1.Open(write("v3.shcl", "a: [x]\n##    Format   3\n")); shclw.KindOf(err) != shclw.ErrTooNew {
 		t.Errorf("v1 on a format 3 file: got %v, want toonew", err)
 	}
+	// A Format line in a raw body is the body's. A real one after it still
+	// counts.
+	raw := "a: 1\ntmpl:\n\t~~~\n##    Format   9\n\t~~~\n"
+	inRaw := write("raw.shcl", raw)
+	rawThenReal := write("rawreal.shcl", raw+"##    Format   9\n")
+	for _, o := range opens {
+		if err := o.open(inRaw); err != nil {
+			t.Errorf("v%d raw.shcl: got %v, want no error", o.n, err)
+		}
+		if got := shclw.KindOf(o.open(rawThenReal)); got != shclw.ErrTooNew {
+			t.Errorf("v%d rawreal.shcl: got %v, want toonew", o.n, got)
+		}
+	}
 }
 
 // A 2.x file the old shcl reported errors on is refused, and UpgradeFile

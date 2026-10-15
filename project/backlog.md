@@ -315,6 +315,32 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Swept: Put, PutSyntax, Comment, and Remove in Go `shclw1` to `shclw3` and Rust `v1` to `v3`, each on the first, an inner, and the last step of a path, with the rest there and not there. 3.0 needs no check of its own, since shcl 3.0 refuses these itself, and the test walks it too. Remove takes every instance on every version, as decided. No other `Doc` or `ShclDoc` method edits the document. `Write` and `UpgradeFile` take a file path, not a document path.
 	- Acceptance signoff: Waiting. `First` and `Last` now give a narrowed path for a single instance, which changes what design.md said.
 
+- FormatOf reads a Format line inside a raw block on 1.2 and 2.0
+	- ID: 2026101515553202
+	- Type: Bug
+	- Status: Waiting on signoff
+	- Severity: Avg
+	- Opened: 20261015-155532
+	- Opened by: JC
+	- Steps to reproduce:
+		- On 1.2 or 2.0, open a file whose raw block has a `##    Format   9` line in its body, as in case 022.
+	- Incorrect behavior: `FormatOf` gives 9, so `Open` refuses the file as too new.
+	- Expected behavior: Lines inside a raw body don't count, the same as on 3.0.
+	- Note: found while building the info block. The block finder in `shclw/info.go` and `src/info.rs` already skips raw bodies.
+	- Reproduced: 20261015, on 1.2 and 2.0 in Go and Rust. `FormatOf` gave 9, and `Open` and `Upgrade` with `from` 0 said too new. 3.0 gave 0.
+	- Actual cause:
+		- 1.2 and 2.0 read the Format line with a plain text scan of every line, which can't see raw bodies.
+	- Decisions:
+		- `FormatOf` on 1.2 and 2.0 now goes through the same check the info block uses: a Format line counts only when taking it out leaves every value and error the same.
+		- It also reads the line the way 3.0 and the info block do: indented or not, digits only. Before, only a line at the left edge counted, and `+9` or extra blanks read as 9. With several lines, the first naming the bound format or newer wins, else the highest, as 3.0 picks.
+	- Actual fix: One shared routine in `shclw/info.go` and `src/info.rs` finds the Format lines that count, for both `FormatOf` and the save's check. The old text scan is gone.
+	- Verified: the gate and a 20 second fuzz, Go against Rust, with no difference. No existing want file changed.
+	- Branch: formatof
+	- Commit: 909d0c6
+	- Test case: tests/cases/028-format-raw, and Go `TestOpen` and Rust `open` with a Format line in a raw body, and a real one after it. They failed before the fix on 1.2 and 2.0 in Go and Rust, and pass after.
+	- Swept: `Open`, `OpenWith`, `Upgrade`, and `UpgradeFile` in Go `shclw1` to `shclw3` and Rust `v1` to `v3` all go through that version's `FormatOf`, and so does the `format` op. 3.0's is shcl's own, which already skips raw bodies.
+	- Acceptance signoff: Waiting. The line is now read as 3.0 reads it, which is wider than the item.
+
 - Each on a wildcard path gives paths that don't read one instance
 	- ID: 2026101515055253
 	- Type: Bug
@@ -463,19 +489,6 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Opened by: JC
 	- Parent ID: 2026101512024159
 	- Note: shcl keeps every string read until the document is freed. Folderkite saw 19 MB after 200,000 reads, so it releases reads after each one and compacts after a save.
-
-- FormatOf reads a Format line inside a raw block on 1.2 and 2.0
-	- ID: 2026101515553202
-	- Type: Bug
-	- Status: Queued
-	- Severity: Avg
-	- Opened: 20261015-155532
-	- Opened by: JC
-	- Steps to reproduce:
-		- On 1.2 or 2.0, open a file whose raw block has a `##    Format   9` line in its body, as in case 022.
-	- Incorrect behavior: `FormatOf` gives 9, so `Open` refuses the file as too new.
-	- Expected behavior: Lines inside a raw body don't count, the same as on 3.0.
-	- Note: found while building the info block. The block finder in `shclw/info.go` and `src/info.rs` already skips raw bodies.
 
 - Layered loading
 	- ID: 2026101512024156
@@ -787,6 +800,19 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Opened by: JC
 	- Parent ID: 2026101512024159
 	- Note: Cobblevale compiles shcl in one file with `SHCL_NO_FILE_IO`, since the file calls pull in `windows.h`, adn writes files itself. Write would need its own code for that build.
+
+- Upgrade says a file with no Format line is from 2 on 3.0
+	- ID: 2026101516183333
+	- Type: Bug
+	- Status: Queued
+	- Severity: Low
+	- Opened: 20261015-161833
+	- Opened by: JC
+	- Steps to reproduce:
+		- On 3.0, run the `upgrade` op with `from` 0 on a file with no Format line that loads clean.
+	- Incorrect behavior: It reports `from 2 changed false`.
+	- Expected behavior: design.md says a file with no Format line is taken as current, so `from` should say 3.
+	- Note: shcl documents a fallback to 2 when no line names a format. Seen while fixing 2026101515553202, not yet reproduced on its own.
 
 - Commit and publish from cicd
 	- ID: 2026101512024171

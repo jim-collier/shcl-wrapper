@@ -26,7 +26,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 mod info;
-pub use info::{finish_info, info_text, Info, InfoEdit};
+pub use info::{finish_info, format_in, info_text, Info, InfoEdit};
 
 /// How a read went. `BadPath` is new in shcl 3.0; older versions say
 /// `NotFound` for a path that doesn't parse.
@@ -773,25 +773,6 @@ fn selector_of(body: &str) -> Option<Sel> {
 
 fn bare_char(c: u8) -> bool {
 	c.is_ascii_alphanumeric() || c == b'-' || c == b'_'
-}
-
-const FORMAT_HEAD: &str = "##    Format   ";
-
-/// The number a `##    Format   N` line names, or 0. It's for modules whose
-/// shcl predates the Format line, so they can refuse a newer file rather
-/// than misread it.
-pub fn scan_format(text: &str) -> u32 {
-	for line in text.split('\n') {
-		let Some(rest) = line.trim_end_matches('\r').strip_prefix(FORMAT_HEAD) else {
-			continue;
-		};
-		if let Ok(n) = rest.trim().parse::<u32>() {
-			if n > 0 {
-				return n;
-			}
-		}
-	}
-	0
 }
 
 /// Reads a whole file, with a missing file as `NotFound`.

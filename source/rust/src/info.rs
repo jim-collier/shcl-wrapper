@@ -63,13 +63,7 @@ pub fn finish_info(text: &str, info: Info, stamp: bool, e: &InfoEdit<'_>) -> Res
 	let comments = |f: &InfoLines, drop: &[bool]| (e.values)(&f.join_without(Some(drop))) == base;
 
 	let mut named = false;
-	for i in 0..n {
-		let Some(v) = format_number(f.trimmed(i), e.major) else {
-			continue;
-		};
-		if v == 0 || !comments(&f, &span(n, i, i + 1)) {
-			continue;
-		}
+	for v in formats_named(&f, e, &base) {
 		if v > e.major {
 			return Err(Error::new(ErrKind::TooNew).msg(format!("the file names format {v}")));
 		}
@@ -120,6 +114,37 @@ pub fn finish_info(text: &str, info: Info, stamp: bool, e: &InfoEdit<'_>) -> Res
 		return Err(Error::new(ErrKind::Refused).msg("the file ends in a raw block that never closes"));
 	}
 	Ok(format!("{bom}{out}"))
+}
+
+/// The format `text`'s Format line names, or 0, for a module whose shcl
+/// doesn't read the line. It reads it as shcl 3.0 does, and a line in a raw
+/// body is the body's. Of several, the first naming `major` or newer wins,
+/// or else the highest.
+pub fn format_in(text: &str, e: &InfoEdit<'_>) -> u32 {
+	let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+	// Most files have none, and every open asks.
+	if !text.contains(FORMAT_WORD) {
+		return 0;
+	}
+	let mut highest = 0;
+	for v in formats_named(&InfoLines::split(text), e, &(e.values)(text)) {
+		if v >= e.major {
+			return v;
+		}
+		highest = highest.max(v);
+	}
+	highest
+}
+
+/// The number on each Format line that counts, in order. A line counts when
+/// taking it out leaves the values at `base`, so one in a raw body doesn't.
+fn formats_named(f: &InfoLines, e: &InfoEdit<'_>, base: &str) -> Vec<u32> {
+	let n = f.lines.len();
+	(0..n)
+		.filter_map(|i| format_number(f.trimmed(i), e.major).map(|v| (i, v)))
+		.filter(|&(i, v)| v != 0 && (e.values)(&f.join_without(Some(&span(n, i, i + 1)))) == base)
+		.map(|(_, v)| v)
+		.collect()
 }
 
 /// Reads a Format line as shcl 3.0 does: the head, then digits only. Some

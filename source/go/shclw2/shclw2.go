@@ -120,8 +120,9 @@ func OpenWith(path string, s Strictness) (*Doc, error) {
 	return d, err
 }
 
-// FormatOf is the format a file's Format line names, or 0 with none.
-func FormatOf(text string) int { return shclw.ScanFormat(text) }
+// FormatOf is the format a file's Format line names, or 0 with none. One
+// in a raw body is the body's.
+func FormatOf(text string) int { return shclw.FormatIn(text, infoEdit) }
 
 // Upgrade has nothing to convert in 2.0. It hands text back, refuses a
 // file newer than 2.0 reads, and can't take a 1.x file forward.

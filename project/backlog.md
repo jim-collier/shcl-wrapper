@@ -467,7 +467,7 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 - FormatOf reads a Format line inside a raw block on 1.2 and 2.0
 	- ID: 2026101515553202
 	- Type: Bug
-	- Status: Queued
+	- Status: Waiting on signoff
 	- Severity: Avg
 	- Opened: 20261015-155532
 	- Opened by: JC
@@ -476,6 +476,19 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Incorrect behavior: `FormatOf` gives 9, so `Open` refuses the file as too new.
 	- Expected behavior: Lines inside a raw body don't count, the same as on 3.0.
 	- Note: found while building the info block. The block finder in `shclw/info.go` and `src/info.rs` already skips raw bodies.
+	- Reproduced: 20261015, on 1.2 and 2.0 in Go and Rust. `FormatOf` gave 9, and `Open` and `Upgrade` with `from` 0 said too new. 3.0 gave 0.
+	- Actual cause:
+		- 1.2 and 2.0 read the Format line with a plain text scan of every line, which can't see raw bodies.
+	- Decisions:
+		- `FormatOf` on 1.2 and 2.0 now goes through the same check the info block uses: a Format line counts only when taking it out leaves every value and error the same.
+		- It also reads the line the way 3.0 and the info block do: indented or not, digits only. Before, only a line at the left edge counted, and `+9` or extra blanks read as 9. With several lines, the first naming the bound format or newer wins, else the highest, as 3.0 picks.
+	- Actual fix: One shared routine in `shclw/info.go` and `src/info.rs` finds the Format lines that count, for both `FormatOf` and the save's check. The old text scan is gone.
+	- Verified: the gate and a 20 second fuzz, Go against Rust, with no difference. No existing want file changed.
+	- Branch: formatof
+	- Commit: 909d0c6
+	- Test case: tests/cases/028-format-raw, and Go `TestOpen` and Rust `open` with a Format line in a raw body, and a real one after it. They failed before the fix on 1.2 and 2.0 in Go and Rust, and pass after.
+	- Swept: `Open`, `OpenWith`, `Upgrade`, and `UpgradeFile` in Go `shclw1` to `shclw3` and Rust `v1` to `v3` all go through that version's `FormatOf`, and so does the `format` op. 3.0's is shcl's own, which already skips raw bodies.
+	- Acceptance signoff: Waiting. The line is now read as 3.0 reads it, which is wider than the item.
 
 - Layered loading
 	- ID: 2026101512024156

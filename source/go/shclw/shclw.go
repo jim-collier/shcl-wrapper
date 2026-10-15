@@ -244,6 +244,9 @@ type Doc interface {
 	PutSyntax(path, text string) error
 	Comment(path, text string) error
 	Remove(path string) int
+
+	InfoBlock(on bool) error
+	StampFormat() error
 }
 
 // Lib is one adapter's package-level calls, for code that picks a shcl

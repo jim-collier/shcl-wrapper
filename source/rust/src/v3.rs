@@ -23,6 +23,8 @@ pub const FORMAT_MAJOR: u32 = shcl::FORMAT_MAJOR;
 #[derive(Debug)]
 pub struct Doc {
 	d: shcl::Document,
+	info: crate::Info,
+	stamp: bool,
 }
 
 /// This module's calls as a [`crate::Lib`].
@@ -68,12 +70,20 @@ pub fn parse_with(text: &str, level: Strictness) -> Result<Doc, Error> {
 
 fn parse_keep(text: &str, level: Strictness) -> (Doc, Option<Error>) {
 	match shcl::Document::parse_keep_lines(text, strictness(level)) {
-		Ok(d) => (Doc { d }, None),
+		Ok(d) => (doc(d), None),
 		Err(le) => {
 			let mut e = Error::new(ErrKind::Strict).msg(le.to_string());
 			e.diags = diags(&le.diagnostics);
-			(Doc { d: le.document }, Some(e))
+			(doc(le.document), Some(e))
 		}
+	}
+}
+
+fn doc(d: shcl::Document) -> Doc {
+	Doc {
+		d,
+		info: crate::Info::AsIs,
+		stamp: false,
 	}
 }
 
@@ -194,7 +204,50 @@ fn upgraded(u: shcl::Upgrade) -> Upgraded {
 	}
 }
 
+fn info_edit() -> crate::InfoEdit<'static> {
+	crate::InfoEdit {
+		block: shcl::GEN_BANNER,
+		major: FORMAT_MAJOR,
+		values,
+	}
+}
+
+/// Every field's path and value and the load's error codes, for
+/// `crate::finish_info` to tell a comment from a raw body's line.
+fn values(text: &str) -> String {
+	let d = shcl::Document::parse(text);
+	let mut s = String::new();
+	for f in d.fields() {
+		s.push_str(&f.path);
+		s.push('\0');
+		s.push_str(&f.value);
+		s.push('\x01');
+	}
+	for x in d.diagnostics() {
+		if x.severity == shcl::Severity::Error {
+			s.push_str(x.code);
+			s.push('\x02');
+		}
+	}
+	s
+}
+
 impl Doc {
+	/// The save's text before the info block and the Format line.
+	fn lines(&self) -> String {
+		match self.d.to_text_keep_lines() {
+			(t, true) => t,
+			(_, false) => self.d.to_canonical(),
+		}
+	}
+
+	/// `text` with the info block and the Format line as `info_block` and
+	/// `stamp_format` asked, or as it is when an edit since made them
+	/// impossible, which `write` reports.
+	fn finish(&self, text: String) -> String {
+		crate::finish_info(&text, self.info, self.stamp, &info_edit()).unwrap_or(text)
+	}
+
 	/// The shcl document underneath, for calls shclw doesn't cover.
 	pub fn inner(&self) -> &shcl::Document {
 		&self.d
@@ -235,36 +288,42 @@ impl Doc {
 
 impl ShclDoc for Doc {
 	fn text(&self) -> String {
-		match self.d.to_text_keep_lines() {
-			(t, true) => t,
-			(_, false) => self.d.to_canonical(),
-		}
+		self.finish(self.lines())
 	}
 
 	fn canonical(&self) -> String {
-		self.d.to_canonical()
+		self.finish(self.d.to_canonical())
 	}
 
+	/// Refuses when the load dropped lines the save would lose, the same
+	/// check shcl's `save_file_keep_lines` makes, and writes nothing when the
+	/// info block or the Format line can't go in, since an edit made after
+	/// `info_block` or `stamp_format`.
 	fn write(&self, path: &str) -> Result<(), Error> {
-		match self.d.save_file_keep_lines(path) {
-			Ok(_) => Ok(()),
-			Err(shcl::SaveError::Refused { lost, .. }) => Err(Error::new(ErrKind::Refused)
+		let (text, kept) = self.d.to_text_keep_lines();
+		let lost = self.d.lost_count();
+		if !kept && lost > 0 {
+			return Err(Error::new(ErrKind::Refused)
 				.path(path)
-				.msg(format!("{lost} lines would be lost"))),
-			Err(shcl::SaveError::Io(w)) => {
-				let kind = if w.status == shcl::WriteStatus::NotFound {
-					ErrKind::NotFound
-				} else {
-					ErrKind::Io
-				};
-				Err(Error::new(kind).path(path).msg(w.message))
-			}
+				.msg(format!("{lost} lines would be lost")));
 		}
+		let text = if kept { text } else { self.d.to_canonical() };
+		let text = crate::finish_info(&text, self.info, self.stamp, &info_edit()).map_err(|e| e.path(path))?;
+		shcl::write_file_atomic(path, &text).map_err(|w| {
+			let kind = if w.status == shcl::WriteStatus::NotFound {
+				ErrKind::NotFound
+			} else {
+				ErrKind::Io
+			};
+			Error::new(kind).path(path).msg(w.message)
+		})
 	}
 
 	/// 3.0 writes the canonical form when it can't keep the lines with the
 	/// edits in, such as after a child is added under a flat dotted line,
 	/// and comments can move. This builds the save's text to find out.
+	/// `info_block` and `stamp_format` change only their own lines, so they
+	/// don't change the answer.
 	fn rewrites(&self) -> bool {
 		!self.d.to_text_keep_lines().1
 	}
@@ -437,6 +496,20 @@ impl ShclDoc for Doc {
 
 	fn remove(&mut self, path: &str) -> usize {
 		self.d.remove(path)
+	}
+
+	/// shcl's own `set_banner` leaves an old block above the first field.
+	fn info_block(&mut self, on: bool) -> Result<(), Error> {
+		let info = if on { crate::Info::On } else { crate::Info::Off };
+		crate::finish_info(&self.lines(), info, self.stamp, &info_edit())?;
+		self.info = info;
+		Ok(())
+	}
+
+	fn stamp_format(&mut self) -> Result<(), Error> {
+		crate::finish_info(&self.lines(), self.info, true, &info_edit())?;
+		self.stamp = true;
+		Ok(())
 	}
 }
 

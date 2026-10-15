@@ -67,7 +67,7 @@ Status: draft, 2026-10-15. Go and Rust are built over shcl 1.2, 2.0, and 3.0. C 
 
 ### Non-goals
 
-- Covering all of shcl. Raw blocks, datetimes, durations, sizes, merging, schema generation, and the info block stay with shcl, through `Inner()`.
+- Covering all of shcl. Raw blocks, datetimes, durations, sizes, merging, and schema generation stay with shcl, through `Inner()`.
 
 - Hiding the file format change. A program built on 1.2 can't read a format 3 file. The wrapper says so with `ErrTooNew`, and `Upgrade` moves files forward where the bound shcl can.
 
@@ -79,7 +79,7 @@ Status: draft, 2026-10-15. Go and Rust are built over shcl 1.2, 2.0, and 3.0. C 
 
 - Most of the cost is in testing: every language times every shcl version, with each version's pinned copy fetched and built.
 
-- The wrapper can't help with what it doesn't cover. A program that leans on line-keeping saves, merges, or the info block still has those calls to move by hand when shcl changes them.
+- The wrapper can't help with what it doesn't cover. A program that leans on line-keeping saves or merges still has those calls to move by hand when shcl changes them.
 
 - It would stop being worth it if it grew toward shcl's own size. The line is the basics plus whatever 2 or more programs need.
 
@@ -122,6 +122,7 @@ Go names are listed. Rust uses the same words in snake case, and `ShclDoc` has t
 	- 1.2 and 2.0 only save canonical form, so it's true for any loaded text that wasn't canonical already.
 	- A `New` document has no lines to keep, and says false.
 	- On 3.0 it builds the save's text to find out, so it costs about what `Text` does.
+	- `InfoBlock` and `StampFormat` don't change it. They touch only the block and the Format line, and the rest of the save is what it was.
 
 ### Reads
 
@@ -200,6 +201,24 @@ Go names are listed. Rust uses the same words in snake case, and `ShclDoc` has t
 	- That check needs shcl 2.0, so the 3.0 adapter builds it in too. In Rust the `shcl3` feature turns on `shcl2`.
 	- 1.2 and 2.0 have nothing to upgrade. They hand the text back, or refuse a newer file with `ErrTooNew`.
 
+- `d.InfoBlock(on)` puts the info block at the end of what the save writes, or with `on` false leaves it out.
+	- Every old block comes off first, wherever it is. That's each spelling shcl has written, 2.x's `#` one, and a lone Format line with the note `migrate` writes under it. A Schema line in a block stays where it is.
+	- shcl 3.0's own `SetBanner` leaves a block above the first field and adds a second one. The wrapper takes that one off too.
+	- On 3.0 the block is shcl's `GenBanner`. 1.2 and 2.0 have no block with a Format line, so the wrapper writes the same one naming format 1 or 2, with the Syntax line linking that release's spec, `v1.2.0` or `v2.0.0`. Both load it as comments with no diagnostics.
+	- It goes last, after one blank line, so fields put after the call go above it.
+
+- `d.StampFormat()` adds the Format line at the end of what the save writes, without the block, unless a comment already names the bound format. It goes right under the last line, same place as shcl's `Migrate` puts it.
+
+- Both change what `Text`, `Canonical`, and `Write` give, and leave the document alone. Reads, `Lines`, and `Diags` are what they were.
+
+- Both refuse a file whose Format line names another format. A newer one is `ErrTooNew`. An older one is `ErrRefused`, since stamping it would make `Upgrade` take it as current and skip the conversion. It has to be upgraded first.
+	- A file that ends in a raw block that never closes is `ErrRefused` too, since anything added would be the block's content. 1.2 and 2.0 close the block in their canonical form, so only 3.0 refuses it.
+	- An edit after the call can lead to the same refusal. Then `Text` leaves the block and the line out, and `Write` refuses adn writes nothing.
+
+- A run of lines counts as a block, or as a Format line, only when taking it out leaves every value and every error the same. That's how a block's text inside a raw body is told from a real one, in every version.
+
+- Lines the wrapper adds end the way most of the file's lines do, LF on a tie, as shcl's stamp does.
+
 ### Errors
 
 - One error type, `*shclw.Error` in Go and `shclw::Error` in Rust, with a kind a program can act on: `NotFound`, `IO`, `Strict`, `Refused`, `BadPath`, `BadValue`, `TooNew`, `Unsupported`, `Ambiguous`, `BackupTaken`, and `NoReadBack`.
@@ -232,6 +251,9 @@ Each row has a test, either a shared case or an API test.
 | A put of infinity or NaN                 | 1.2 and 2.0 write it, and it reads back as `BadType`. 3.0 refuses. | Refuses with `BadValue`, everywhere, and changes nothing.
 | Opening a newer format's file            | 1.2 and 2.0 read it, wrongly.                                      | `ErrTooNew`.
 | Upgrading a 2.x file 2.0 had errors on   | 3.0 writes a clean file, with nothing lost and no error.           | Refuses with `ErrRefused` and leaves the file alone.
+| The info block on 1.2 and 2.0            | No call. Their `init` wrote a `#` block with no Format line.       | `InfoBlock` writes the `##` block naming the bound format.
+| An old info block above the first field  | 3.0's `SetBanner` leaves it and adds a second block.               | `InfoBlock` takes it off, everywhere.
+| A Format line without the block          | 3.0 has it only as part of `Migrate`.                              | `StampFormat`, everywhere.
 | A file that isn't UTF-8                  | Varies by language.                                                | `ErrIO`, everywhere.
 | Walking repeated entries                 | Selector syntax differs by version.                                | `Each` gives paths, and `Child` extends them.
 | Saving in 1.2                            | No save call.                                                      | `Write` saves atomically.
@@ -262,6 +284,7 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 | `put TYPE PATH VALUE...`                | `ok` or `error KIND`
 | `syntax PATH TEXT`, `comment PATH TEXT` | `ok` or `error KIND`
 | `remove PATH`                           | how many instances went
+| `info on\|off`, `stamp`                 | `ok` or `error KIND`, from `InfoBlock` and `StampFormat`
 | `check FILE [all\|drop]`                | the schema check, with the load's own diagnostics for `all`, and then dropped ones for `drop`
 | `format`, `upgrade [FROM]`              | the format number, or the upgrade's result and text
 | `write FILE`                            | `ok` and the saved file, or `error KIND`
@@ -292,7 +315,7 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 
 - `cicd/fuzz.py` makes a document and an ops script from each seed, with a generator that knows each format's syntax. A quarter of the documents are mutated copies of the case documents instead.
 
-- Each case runs through the Go and Rust drivers on the same shcl version. The outputs must match byte for byte, neither may crash, and a put that says ok must read back the same. A float read that says `Good` must not give infinity or NaN. A `first` or `last` read must not say `Multiple`, and has to be on the first or last line `lines` gave for that path. An edit that says ok must have found one instance at every step of its path that exists, counted just before it.
+- Each case runs through the Go and Rust drivers on the same shcl version. The outputs must match byte for byte, neither may crash, and a put that says ok must read back the same. A float read that says `Good` must not give infinity or NaN. A `first` or `last` read must not say `Multiple`, and has to be on the first or last line `lines` gave for that path. An edit that says ok must have found one instance at every step of its path that exists, counted just before it. The text right after an `info on` that says ok ends with the block naming the version's format, holds one block where the document had no block text in a raw body, and a second `info on` doesn't change it.
 
 - It runs for a wall-clock budget, and a failing seed is saved with its document, script, and both outputs. If too few reads find a value, the run fails, since a generator that stopped making readable documents would pass forever.
 
@@ -345,6 +368,16 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 - `Each` narrows every step that repeats, so its paths take edits too. `First` and `Last` give that path even for one instance, since a path as typed can repeat at an inner step and be refused.
 
 - `Each` on a wildcard lists the nodes it reaches, as 3.0's own field list does, rather than refusing wildcards. 1.2 and 2.0 build the same list from counts and child names.
+
+- The info block names the bound shcl's format, so a 1.2 program writes format 1. A block naming 3 on every version would make 3.0's `Upgrade` take an unconverted 2.x file as current. The rest of the block is the same on every version, but for the Syntax link.
+
+- `InfoBlock` and `StampFormat` take effect when the save's text is built, rather than editing the document. 1.2 and 2.0 have no call that changes the comments at the end of a document, and 3.0 has none for a lone Format line. Parsing the edited text again would renumber the lines and lose the load's diagnostics and its count of lost lines, which `Write` refuses on.
+
+- One line-based routine does the block in every version, rather than 3.0's `SetBanner` plus a fix for what it misses. Every version then gives the same text, and Go and Rust share the cases.
+
+- 2.x's `#` block comes off on every version. shcl 3.0 takes it off only in `Upgrade`, and reads it otherwise as a comment of the file's own. Nobody writes that title line by hand, and leaving it gives the file 2 blocks.
+
+- A file whose Format line names another format is refused, rather than written over. On 3.0 an older one means the file still needs `Upgrade`, and a newer one is a file this shcl can't read right. On 2.0 that includes a format 1 file, which 2.0 has no upgrade for.
 
 - `Lines` is its own call, rather than a field on `Got`, so a program that keeps the `Multiple` default can still name the lines in its warning, and a read costs nothing extra.
 

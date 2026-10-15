@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/jim-collier/shclwrap/source/go/shclw"
 	"github.com/jim-collier/shclwrap/source/go/shclw2"
@@ -54,7 +55,9 @@ func KindOf(err error) ErrKind { return shclw.KindOf(err) }
 
 // Doc is a parsed document.
 type Doc struct {
-	d *shcl.Document
+	d     *shcl.Document
+	info  shclw.Info
+	stamp bool
 }
 
 var _ shclw.Doc = (*Doc)(nil)
@@ -233,7 +236,13 @@ func (d *Doc) Inner() *shcl.Document { return d.d }
 
 // Text is the document as it would be saved: its lines as typed, plus the
 // edits, or the canonical form when 3.0 can't keep the lines.
-func (d *Doc) Text() string {
+func (d *Doc) Text() string { return d.finish(d.lines()) }
+
+// Canonical is the document in canonical form.
+func (d *Doc) Canonical() string { return d.finish(d.d.ToCanonical()) }
+
+// lines is the save's text before the info block and the Format line.
+func (d *Doc) lines() string {
 	text, ok := d.d.ToTextKeepLines()
 	if !ok {
 		return d.d.ToCanonical()
@@ -241,20 +250,38 @@ func (d *Doc) Text() string {
 	return text
 }
 
-// Canonical is the document in canonical form.
-func (d *Doc) Canonical() string { return d.d.ToCanonical() }
+// finish is text with the info block and the Format line as InfoBlock and
+// StampFormat asked. When an edit since made that impossible, it's the text
+// without them, and Write says why.
+func (d *Doc) finish(text string) string {
+	if out, err := shclw.FinishInfo(text, d.info, d.stamp, infoEdit); err == nil {
+		return out
+	}
+	return text
+}
 
 // Write saves Text atomically. It refuses with ErrRefused when the load
-// dropped lines the save would lose.
+// dropped lines the save would lose, the same check shcl's
+// SaveFileKeepLines makes, and writes nothing when the info block or the
+// Format line can't go in, since an edit made after InfoBlock or
+// StampFormat.
 func (d *Doc) Write(path string) error {
-	_, err := d.d.SaveFileKeepLines(path)
+	text, kept := d.d.ToTextKeepLines()
+	if lost := d.d.LostCount(); !kept && lost > 0 {
+		return &shclw.Error{Kind: shclw.ErrRefused, Path: path,
+			Msg: fmt.Sprintf("%d lines would be lost", lost), Err: &shcl.SaveRefused{Path: path, Lost: lost}}
+	}
+	if !kept {
+		text = d.d.ToCanonical()
+	}
+	text, err := shclw.FinishInfo(text, d.info, d.stamp, infoEdit)
+	if err != nil {
+		err.(*shclw.Error).Path = path
+		return err
+	}
+	err = shcl.WriteFileAtomic(path, text)
 	if err == nil {
 		return nil
-	}
-	var refused *shcl.SaveRefused
-	if errors.As(err, &refused) {
-		return &shclw.Error{Kind: shclw.ErrRefused, Path: path,
-			Msg: fmt.Sprintf("%d lines would be lost", refused.Lost), Err: err}
 	}
 	var we *shcl.WriteError
 	if errors.As(err, &we) && we.Status == shcl.WriteNotFound {
@@ -266,10 +293,41 @@ func (d *Doc) Write(path string) error {
 // Rewrites says whether Write puts the canonical form in place of the lines
 // the document was loaded from. 3.0 does that when it can't keep them with
 // the edits in, such as after a child is added under a flat dotted line,
-// and comments can move. It builds the save's text to find out.
+// and comments can move. It builds the save's text to find out. InfoBlock
+// and StampFormat change only their own lines, so they don't change the
+// answer.
 func (d *Doc) Rewrites() bool {
 	_, kept := d.d.ToTextKeepLines()
 	return !kept
+}
+
+// InfoBlock puts the info block, shcl's GenBanner, at the end of what the
+// save writes, or with on false leaves it out. Either way an old block comes
+// off first, in any spelling shcl has written, wherever it is. shcl's own
+// SetBanner leaves one above the first field. A file whose Format line
+// names another format is refused, and so is one that ends in a raw block
+// that never closes.
+func (d *Doc) InfoBlock(on bool) error {
+	info := shclw.InfoOff
+	if on {
+		info = shclw.InfoOn
+	}
+	if _, err := shclw.FinishInfo(d.lines(), info, d.stamp, infoEdit); err != nil {
+		return err
+	}
+	d.info = info
+	return nil
+}
+
+// StampFormat adds the Format line at the end of what the save writes,
+// unless a comment already names format 3. It refuses what InfoBlock
+// refuses.
+func (d *Doc) StampFormat() error {
+	if _, err := shclw.FinishInfo(d.lines(), d.info, true, infoEdit); err != nil {
+		return err
+	}
+	d.stamp = true
+	return nil
 }
 
 // Diags is what the load found.
@@ -434,6 +492,24 @@ func (d *Doc) setErr(path string, st shcl.SetStatus) error {
 		return &shclw.Error{Kind: shclw.ErrBadPath, Path: path, Msg: st.String()}
 	}
 	return &shclw.Error{Kind: shclw.ErrBadValue, Path: path, Msg: st.String()}
+}
+
+var infoEdit = shclw.InfoEdit{Block: shcl.GenBanner, Major: FormatMajor, Values: values}
+
+// values is every field's path and value and the load's error codes, for
+// shclw.FinishInfo to tell a comment from a raw body's line.
+func values(text string) string {
+	d := shcl.Parse(text)
+	var b strings.Builder
+	for _, f := range d.Fields() {
+		b.WriteString(f.Path + "\x00" + f.Value + "\x01")
+	}
+	for _, x := range d.Diagnostics() {
+		if x.Severity == shcl.SeverityError {
+			b.WriteString(x.Code + "\x02")
+		}
+	}
+	return b.String()
 }
 
 var otherVersion = Diag{Severity: shclw.SevError, Code: "W001", Message: "schema is from another shcl version"}

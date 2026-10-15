@@ -1,0 +1,9 @@
+# A lone stamp naming format 2. Only 2.0 can call that its own.
+info	on
+text
+stamp
+info	off
+text
+parse
+stamp
+text

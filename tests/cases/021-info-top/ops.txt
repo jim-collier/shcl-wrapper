@@ -1,0 +1,18 @@
+# An old spelling above the first field, where shcl 3.0's own setter adds a
+# second block. Its Schema line stays.
+info	on
+text
+rewrites
+info	on
+text
+canonical
+info	off
+text
+stamp
+text
+write	out.shcl
+# A stamp alone leaves the old block, which has no Format line.
+parse
+stamp
+text
+info	maybe

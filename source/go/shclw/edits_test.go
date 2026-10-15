@@ -28,6 +28,8 @@ var docMethods = map[string]string{
 	"Put": "edit", "PutSyntax": "edit", "Comment": "edit",
 	// Takes every instance, on purpose (design.md, Writes).
 	"Remove": "remove",
+	// No path; they change what the save writes (design.md, Format and upgrade).
+	"InfoBlock": "info", "StampFormat": "info",
 }
 
 var edits = map[string]func(d shclw.Doc, path string) error{

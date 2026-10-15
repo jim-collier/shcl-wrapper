@@ -294,3 +294,82 @@ fn several() {
 	check_several::<shclw::v2::Version>(2);
 	check_several::<shclw::v3::Version>(3);
 }
+
+/// Every info block shcl's `GEN_BANNER` has been, in order, and 2.x's. The
+/// betas linked tags that were never cut. `{n}` is the format.
+const OLD_BLOCKS: [&str; 6] = [
+	"#\n# This config file format is SHCL.\n# \"Simple Hierarchical Config Language\"\n#    Home     https://github.com/jim-collier/shcl\n#    Syntax   https://github.com/jim-collier/shcl/blob/main/project/spec.md\n#    Legal    SHCL is Copyright © 2026 Jim Collier. License: MIT. No warranty.\n#\n",
+	"##\n## This config file format is SHCL.\n## \"Simple Hierarchical Config Language\"\n##    Home     https://github.com/jim-collier/shcl\n##    Syntax   https://github.com/jim-collier/shcl/blob/main/project/spec.md\n##    Legal    SHCL is Copyright © 2026 Jim Collier. License: MIT. No warranty.\n##\n",
+	"##\n## This config file format is SHCL.\n## \"Simple Hierarchical Config Language\"\n##    Home     https://github.com/jim-collier/shcl\n##    Syntax   https://github.com/jim-collier/shcl/blob/main/project/spec.md\n##    Legal    SHCL is Copyright © 2026 Jim Collier [ID: 2უNაɘ«҂թȹɤξπ๙¿ձϖ]. License: MIT. No warranty.\n##\n",
+	"##\n## This config file format is SHCL.\n## \"Simple Hierarchical Config Language\"\n##    Format   {n}\n##    Home     https://github.com/jim-collier/shcl\n##    Syntax   https://github.com/jim-collier/shcl/blob/main/project/spec.md\n##    Legal    SHCL is Copyright © 2026 Jim Collier [ID: 2უNაɘ«҂թȹɤξπ๙¿ձϖ]. License: MIT. No warranty.\n##\n",
+	"##\n## This config file format is SHCL.\n## \"Simple Hierarchical Config Language\"\n##    Format   {n}\n##    Home     https://github.com/jim-collier/shcl\n##    Syntax   https://github.com/jim-collier/shcl/blob/v3.0.0/project/spec.md\n##    Legal    SHCL is Copyright © 2026 Jim Collier [ID: 2უNაɘ«҂թȹɤξπ๙¿ձϖ]. License: MIT. No warranty.\n##\n",
+	"##\n## This config file format is SHCL.\n## \"Simple Hierarchical Config Language\"\n##    Format   {n}\n##    Home     https://github.com/yottacore/shcl\n##    Syntax   https://github.com/yottacore/shcl/blob/v3.0.0/project/spec.md\n##    Legal    SHCL is Copyright © 2026 Jim Collier [ID: 2უNაɘ«҂թȹɤξπ๙¿ձϖ]. License: MIT. No warranty.\n##\n",
+];
+
+#[test]
+fn info_text_is_gen_banner() {
+	assert_eq!(
+		shclw::info_text(shclw::v3::FORMAT_MAJOR, "v3.0.0-beta1"),
+		shclw::v3::shcl::GEN_BANNER
+	);
+}
+
+fn block_of(n: u32) -> String {
+	match n {
+		1 => shclw::info_text(1, "v1.2.0"),
+		2 => shclw::info_text(2, "v2.0.0"),
+		_ => shclw::v3::shcl::GEN_BANNER.to_owned(),
+	}
+}
+
+/// Each old spelling, and the current one, above the first field, between
+/// two, and at the end, becomes one block at the end, and every version
+/// leaves the same text.
+fn check_old_spellings<L: Lib>(n: u32) {
+	let mut blocks: Vec<String> = OLD_BLOCKS.iter().map(|b| b.replace("{n}", &n.to_string())).collect();
+	blocks.push(block_of(n));
+	for (i, old) in blocks.iter().enumerate() {
+		for text in [
+			format!("{old}a: 1\nb: 2\n"),
+			format!("a: 1\n{old}b: 2\n"),
+			format!("a: 1\nb: 2\n\n{old}"),
+		] {
+			let mut d = L::parse(&text);
+			d.info_block(true)
+				.unwrap_or_else(|e| panic!("v{n} spelling {i} in {text:?}: {e}"));
+			assert_eq!(
+				d.text(),
+				format!("a: 1\nb: 2\n\n{}", block_of(n)),
+				"v{n} spelling {i} in {text:?}"
+			);
+		}
+	}
+}
+
+#[test]
+fn info_old_spellings() {
+	check_old_spellings::<shclw::v1::Version>(1);
+	check_old_spellings::<shclw::v2::Version>(2);
+	check_old_spellings::<shclw::v3::Version>(3);
+}
+
+/// An edit after `info_block` that names a newer format leaves `text`
+/// without the block, and `write` refuses, writing nothing.
+fn check_info_write_refused<L: Lib>(n: u32, dir: &std::path::Path) {
+	let mut d = L::parse("a: 1\n");
+	d.info_block(true).unwrap();
+	d.comment("a", "##    Format   9").unwrap();
+	assert!(!d.text().contains("SHCL"), "v{n}: text is {}", d.text());
+	let path = dir.join(format!("v{n}.shcl"));
+	let e = d.write(path.to_str().unwrap()).expect_err("write");
+	assert_eq!(e.kind, ErrKind::TooNew, "v{n}");
+	assert!(!path.exists(), "v{n}: write left a file");
+}
+
+#[test]
+fn info_write_refused() {
+	let scratch = Scratch::new("info");
+	check_info_write_refused::<shclw::v1::Version>(1, scratch.path());
+	check_info_write_refused::<shclw::v2::Version>(2, scratch.path());
+	check_info_write_refused::<shclw::v3::Version>(3, scratch.path());
+}

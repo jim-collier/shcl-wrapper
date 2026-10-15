@@ -8,6 +8,9 @@ use std::path::PathBuf;
 
 use shclw::{verify_put, ErrKind, Lib, ShclDoc, Status, Value};
 
+mod common;
+use common::Scratch;
+
 fn check_verify<L: Lib>(n: u32) {
 	let d = L::parse("a: 1\n");
 	assert!(verify_put(&d, "a", &Value::Int(1)).is_ok(), "v{n}: matching value");
@@ -57,16 +60,10 @@ fn put_f32() {
 	check_f32::<shclw::v3::Version>(3);
 }
 
-fn scratch() -> PathBuf {
-	let base = std::env::var_os("TMPDIR").map_or_else(std::env::temp_dir, PathBuf::from);
-	let dir = base.join(format!("shclw-rust-api-{}", std::process::id()));
-	fs::create_dir_all(&dir).unwrap();
-	dir
-}
-
 #[test]
 fn open() {
-	let dir = scratch();
+	let scratch = Scratch::new("api");
+	let dir = scratch.path();
 	let newer = dir.join("newer.shcl");
 	fs::write(&newer, "a: 1\n##    Format   9\n").unwrap();
 	let binary = dir.join("binary.shcl");
@@ -105,7 +102,6 @@ fn open() {
 		Some(ErrKind::TooNew),
 		"v1 on a format 3 file"
 	);
-	let _ = fs::remove_dir_all(&dir); // only this test's own dir
 }
 
 /// An edit made through `inner_mut`, with calls the wrapper doesn't have,
@@ -147,9 +143,8 @@ fn inner() {
 /// leaves it as it was, with no backup. A clean one still goes.
 #[test]
 fn upgrade_refuses_old_errors() {
-	// Not under scratch(), which open() removes while this runs.
-	let base = std::env::var_os("TMPDIR").map_or_else(std::env::temp_dir, PathBuf::from);
-	let dir = base.join(format!("shclw-rust-upgrade-{}", std::process::id()));
+	let scratch = Scratch::new("upgrade");
+	let dir = scratch.path().join("c");
 	for (text, line) in [("a: 1\nb: ```\nraw line\nc: 2\n", 2), ("x: [ab]\ny: 1\n", 1)] {
 		let e = shclw::v3::upgrade(text, 2).expect_err("upgrade");
 		assert_eq!(e.kind, ErrKind::Refused, "upgrade {text:?}");
@@ -173,5 +168,4 @@ fn upgrade_refuses_old_errors() {
 	}
 	let u = shclw::v3::upgrade("tags: a, b\n", 2).expect("clean 2.x file");
 	assert!(u.changed, "clean 2.x file: {u:?}");
-	let _ = fs::remove_dir_all(&dir); // only this test's own dir
 }

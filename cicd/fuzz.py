@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import random
 import shutil
 import subprocess
@@ -301,32 +302,42 @@ def main() -> int:
 	ran = gets = good_gets = failures = 0
 	seed = first
 	doc_path = args.work / "doc.shcl"
+	made_work = not args.work.exists()
 	args.work.mkdir(parents=True, exist_ok=True)
-	while time.monotonic() < deadline and (args.count == 0 or ran < args.count):
-		case = gen_case(seed, corpus)
-		doc_path.write_text(case.doc)
-		go = run_driver([args.go], case.version, doc_path, args.work / "go", case.script)
-		rust = run_driver([args.rust], case.version, doc_path, args.work / "rust", case.script)
-		problems = []
-		if go[0] != rust[0]:
-			problems.append(f"exit codes differ: go {go[0]}, rust {rust[0]}")
-		if go[0] not in (0, 2) or rust[0] not in (0, 2):
-			problems.append("a driver crashed")
-		if go[1] != rust[1]:
-			problems.append("outputs differ")
-		elif go[0] == 0:
-			problems += check_roundtrips(case, go[1])
-			problems += check_finite(go[1])
-		for line in go[1].split("\n"):
-			if line.startswith(("Good\t", "Empty\t", "NotFound\t", "BadType\t", "Multiple\t", "BadPath\t")):
-				gets += 1
-				good_gets += line.startswith("Good\t")
-		if problems:
-			failures += 1
-			save_failure(args.out, case, "\n".join(problems), go, rust)
-			print(f"FAIL seed {seed} (shcl v{case.version}): {problems[0]}", file=sys.stderr)
-		ran += 1
-		seed += 1
+	try:
+		while time.monotonic() < deadline and (args.count == 0 or ran < args.count):
+			case = gen_case(seed, corpus)
+			doc_path.write_text(case.doc)
+			go = run_driver([args.go], case.version, doc_path, args.work / "go", case.script)
+			rust = run_driver([args.rust], case.version, doc_path, args.work / "rust", case.script)
+			problems = []
+			if go[0] != rust[0]:
+				problems.append(f"exit codes differ: go {go[0]}, rust {rust[0]}")
+			if go[0] not in (0, 2) or rust[0] not in (0, 2):
+				problems.append("a driver crashed")
+			if go[1] != rust[1]:
+				problems.append("outputs differ")
+			elif go[0] == 0:
+				problems += check_roundtrips(case, go[1])
+				problems += check_finite(go[1])
+			for line in go[1].split("\n"):
+				if line.startswith(("Good\t", "Empty\t", "NotFound\t", "BadType\t", "Multiple\t", "BadPath\t")):
+					gets += 1
+					good_gets += line.startswith("Good\t")
+			if problems:
+				failures += 1
+				save_failure(args.out, case, "\n".join(problems), go, rust)
+				print(f"FAIL seed {seed} (shcl v{case.version}): {problems[0]}", file=sys.stderr)
+			ran += 1
+			seed += 1
+	finally:
+		# Only what this run made. --out may sit inside --work, so the folder goes only if empty.
+		doc_path.unlink(missing_ok=True)
+		for sub in ("go", "rust"):
+			shutil.rmtree(args.work / sub, ignore_errors=True)
+		if made_work:
+			with contextlib.suppress(OSError):
+				args.work.rmdir()
 
 	print(f"fuzz: {ran} cases from seed {first}, {failures} failed, {good_gets} of {gets} reads found a value")
 	if ran == 0:

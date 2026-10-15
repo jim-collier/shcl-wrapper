@@ -10,14 +10,15 @@ use std::path::{Path, PathBuf};
 
 use shclw::{run, Lib, RunOptions};
 
+mod common;
+use common::Scratch;
+
 fn cases_dir() -> PathBuf {
 	Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cases")
 }
 
-fn scratch(case: &str, n: u32) -> PathBuf {
-	let base = std::env::var_os("TMPDIR").map_or_else(std::env::temp_dir, PathBuf::from);
-	let dir = base.join(format!("shclw-rust-cases-{}/{case}-v{n}", std::process::id()));
-	let _ = fs::remove_dir_all(&dir); // only ever this test's own dir
+fn scratch(root: &Path, case: &str, n: u32) -> PathBuf {
+	let dir = root.join(format!("{case}-v{n}"));
 	fs::create_dir_all(&dir).unwrap();
 	dir
 }
@@ -58,7 +59,7 @@ fn split_version(name: &str) -> (String, u32) {
 	(name.to_owned(), 0)
 }
 
-fn run_all<L: Lib>(n: u32, failures: &mut Vec<String>, ran: &mut usize) {
+fn run_all<L: Lib>(root: &Path, n: u32, failures: &mut Vec<String>, ran: &mut usize) {
 	let mut cases: Vec<_> = fs::read_dir(cases_dir())
 		.unwrap()
 		.map(|e| e.unwrap().path())
@@ -67,7 +68,7 @@ fn run_all<L: Lib>(n: u32, failures: &mut Vec<String>, ran: &mut usize) {
 	cases.sort();
 	for case in cases {
 		let name = case.file_name().unwrap().to_string_lossy().into_owned();
-		let dir = scratch(&name, n);
+		let dir = scratch(root, &name, n);
 		if !materialize(&case, &dir, n) {
 			continue;
 		}
@@ -89,11 +90,12 @@ fn run_all<L: Lib>(n: u32, failures: &mut Vec<String>, ran: &mut usize) {
 
 #[test]
 fn cases() {
+	let root = Scratch::new("cases");
 	let mut failures = Vec::new();
 	let mut ran = 0;
-	run_all::<shclw::v1::Version>(1, &mut failures, &mut ran);
-	run_all::<shclw::v2::Version>(2, &mut failures, &mut ran);
-	run_all::<shclw::v3::Version>(3, &mut failures, &mut ran);
+	run_all::<shclw::v1::Version>(root.path(), 1, &mut failures, &mut ran);
+	run_all::<shclw::v2::Version>(root.path(), 2, &mut failures, &mut ran);
+	run_all::<shclw::v3::Version>(root.path(), 3, &mut failures, &mut ran);
 	assert!(ran > 0, "no cases ran");
 	assert!(
 		failures.is_empty(),

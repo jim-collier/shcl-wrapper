@@ -185,6 +185,7 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Opened by: JC
 	- Requirements:
 		- `-m` and the usual commit, backup, and publish stage, as the other projects have.
+		- The pre-push hook runs the whole gate for a push that only deletes a branch. It should skip that.
 
 - Run the tests on Windows and macOS
 	- ID: 2026101512024174

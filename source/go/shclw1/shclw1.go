@@ -258,8 +258,8 @@ func (d *Doc) Put(path string, v any) error {
 	if err != nil {
 		return err
 	}
-	if d.d.Count(path) > 1 {
-		return &shclw.Error{Kind: shclw.ErrBadPath, Path: path, Msg: "Multiple"}
+	if err := d.onlyOne(path); err != nil {
+		return err
 	}
 	var ok bool
 	switch val.Kind {
@@ -288,8 +288,8 @@ func (d *Doc) Put(path string, v any) error {
 // read back as typed, such as one with a trailing comment, is
 // ErrNoReadBack, with the edit left in place.
 func (d *Doc) PutSyntax(path, text string) error {
-	if d.d.Count(path) > 1 {
-		return &shclw.Error{Kind: shclw.ErrBadPath, Path: path, Msg: "Multiple"}
+	if err := d.onlyOne(path); err != nil {
+		return err
 	}
 	if err := d.setErr(path, d.d.SetLiteral(path, text)); err != nil {
 		return err
@@ -301,11 +301,25 @@ func (d *Doc) PutSyntax(path, text string) error {
 }
 
 // Comment sets the comment above path.
-func (d *Doc) Comment(path, text string) error { return d.setErr(path, d.d.SetComment(path, text)) }
+func (d *Doc) Comment(path, text string) error {
+	if err := d.onlyOne(path); err != nil {
+		return err
+	}
+	return d.setErr(path, d.d.SetComment(path, text))
+}
 
 // Remove takes out path and everything under it, and says how many
 // instances went.
 func (d *Doc) Remove(path string) int { return d.d.Remove(path) }
+
+// onlyOne refuses a path with several instances. shcl 1.2 would set the
+// first one and say ok, where 3.0 refuses.
+func (d *Doc) onlyOne(path string) error {
+	if d.d.Count(path) > 1 {
+		return &shclw.Error{Kind: shclw.ErrBadPath, Path: path, Msg: "Multiple"}
+	}
+	return nil
+}
 
 func (d *Doc) setErr(path string, ok bool) error {
 	if ok {

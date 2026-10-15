@@ -193,6 +193,43 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Swept: Go `shclw1` to `shclw3` each have the 3 calls, held to it by the `shclw.Doc` interface. Rust has them once, on the `ShclDoc` trait. Both ops runners and fuzz.py's op list have the new ops.
 	- Acceptance signoff: Waiting. It adds API, and the names and the order by line are a choice.
 
+- Info block and Format line
+	- ID: 2026101512024154
+	- Type: Feature
+	- Status: Waiting on signoff
+	- Priority: High
+	- Opened: 2026-10-15
+	- Opened by: JC
+	- Related IDs: 2026101513330010, 2026101513330011
+	- Requirements:
+		- Write and remove shcl's info block, and stamp the Format line.
+	- Notes:
+		- Quillroute, Radixmill, Folderkite, Tickerwren, and Mossrealm each do this by hand today.
+		- 1.2 and 2.0 have no info block, so the wrapper would write it there itself.
+		- Cobblevale wants a way to stamp the Format line without the banner. Its new files had none, and read back like 2.x files.
+		- shcl's own banner setter misses a block that has a line after it, and adds a second one. Folderkite strips the old block itself.
+		- Banners written during the 3.0 betas link a tag that doesn't exist. Wovenshell replaces 4 old spellings at launch.
+		- Radixmill and Cobblevale add the Format line to their test files by hand.
+	- Progress log:
+		- 20261015: `InfoBlock(on)` and `StampFormat()` on every version, in Go and Rust, with the ops `info on|off` and `stamp`. design.md has the rules, under "Format and upgrade".
+		- The banner setter's miss is a block above the first field. shcl's own doc comment says it leaves that one on purpose.
+	- Decisions:
+		- The block names the bound shcl's format, so 1.2 writes format 1 and 2.0 writes format 2. Format 3 everywhere would make 3.0's upgrade skip a file that was never converted. The rest of the block is the same on every version, but for the Syntax link.
+		- 1.2 and 2.0 write the same `##` block 3.0 does, linking their own release's spec. Their own `init` block has no Format line.
+		- Both calls change what the save writes, not the document. 1.2 and 2.0 have no call that edits the comments at the end of a file.
+		- `Rewrites` says the same after either call.
+		- Every old spelling comes off, found by its title line. So does 2.x's `#` block, on every version.
+		- A file naming another format is refused, `ErrRefused` for an older one and `ErrTooNew` for a newer one. On 2.0 that leaves a format 1 file with no way forward, since 2.0 has no upgrade for it.
+		- A file ending in a raw block that never closes is refused, since the block would take in the new lines.
+		- A lone stamp goes right under the last line, where shcl's `Migrate` puts it.
+	- Verified: the gate, and a 20 second fuzz with 10 seconds of Go fuzzing, with no failures. Before the change the new cases printed `error unknownop`, and 3.0 kept the old block above the first field. Each new check failed with its rule taken out of the code.
+	- Branch: info-block
+	- Commit: 6e4627c
+	- Test case: tests/cases/021 to 027. Go `TestInfoTextIsGenBanner`, `TestInfoOldSpellings`, `TestInfoMatchesSetBanner`, and `TestInfoWriteRefused`. Rust `info_text_is_gen_banner`, `info_old_spellings`, and `info_write_refused`. The fuzz info check.
+	- Swept: `Text`, `Canonical`, `Write`, and `Rewrites` in Go `shclw1` to `shclw3` and Rust `v1` to `v3`, the `Doc` interface and `ShclDoc` trait, both ops runners, and design.md's API, ops, and "evens out" sections.
+	- Note: 2026101513330010 and 2026101513330011 can reuse the block finder in `shclw/info.go` and `src/info.rs`, which already finds 2.x's `#` block.
+	- Acceptance signoff: Waiting. New API that changes what a program writes to disk.
+
 - PutSyntax doesn't read its value back
 	- ID: 2026101513330007
 	- Type: Bug
@@ -319,43 +356,6 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- shcl's Go module path is still `.../v2`, and Go won't take a v3 tag on it. Go stays on a commit until that changes.
 		- Quillroute plans to have its release refuse a commit pin. The same check would fit here.
 
-- Info block and Format line
-	- ID: 2026101512024154
-	- Type: Feature
-	- Status: Waiting on signoff
-	- Priority: High
-	- Opened: 2026-10-15
-	- Opened by: JC
-	- Related IDs: 2026101513330010, 2026101513330011
-	- Requirements:
-		- Write and remove shcl's info block, and stamp the Format line.
-	- Notes:
-		- Quillroute, Radixmill, Folderkite, Tickerwren, and Mossrealm each do this by hand today.
-		- 1.2 and 2.0 have no info block, so the wrapper would write it there itself.
-		- Cobblevale wants a way to stamp the Format line without the banner. Its new files had none, and read back like 2.x files.
-		- shcl's own banner setter misses a block that has a line after it, and adds a second one. Folderkite strips the old block itself.
-		- Banners written during the 3.0 betas link a tag that doesn't exist. Wovenshell replaces 4 old spellings at launch.
-		- Radixmill and Cobblevale add the Format line to their test files by hand.
-	- Progress log:
-		- 20261015: `InfoBlock(on)` and `StampFormat()` on every version, in Go and Rust, with the ops `info on|off` and `stamp`. design.md has the rules, under "Format and upgrade".
-		- The banner setter's miss is a block above the first field. shcl's own doc comment says it leaves that one on purpose.
-	- Decisions:
-		- The block names the bound shcl's format, so 1.2 writes format 1 and 2.0 writes format 2. Format 3 everywhere would make 3.0's upgrade skip a file that was never converted. The rest of the block is the same on every version, but for the Syntax link.
-		- 1.2 and 2.0 write the same `##` block 3.0 does, linking their own release's spec. Their own `init` block has no Format line.
-		- Both calls change what the save writes, not the document. 1.2 and 2.0 have no call that edits the comments at the end of a file.
-		- `Rewrites` says the same after either call.
-		- Every old spelling comes off, found by its title line. So does 2.x's `#` block, on every version.
-		- A file naming another format is refused, `ErrRefused` for an older one and `ErrTooNew` for a newer one. On 2.0 that leaves a format 1 file with no way forward, since 2.0 has no upgrade for it.
-		- A file ending in a raw block that never closes is refused, since the block would take in the new lines.
-		- A lone stamp goes right under the last line, where shcl's `Migrate` puts it.
-	- Verified: the gate, and a 20 second fuzz with 10 seconds of Go fuzzing, with no failures. Before the change the new cases printed `error unknownop`, and 3.0 kept the old block above the first field. Each new check failed with its rule taken out of the code.
-	- Branch: info-block
-	- Commit: 6e4627c
-	- Test case: tests/cases/021 to 027. Go `TestInfoTextIsGenBanner`, `TestInfoOldSpellings`, `TestInfoMatchesSetBanner`, and `TestInfoWriteRefused`. Rust `info_text_is_gen_banner`, `info_old_spellings`, and `info_write_refused`. The fuzz info check.
-	- Swept: `Text`, `Canonical`, `Write`, and `Rewrites` in Go `shclw1` to `shclw3` and Rust `v1` to `v3`, the `Doc` interface and `ShclDoc` trait, both ops runners, and design.md's API, ops, and "evens out" sections.
-	- Note: 2026101513330010 and 2026101513330011 can reuse the block finder in `shclw/info.go` and `src/info.rs`, which already finds 2.x's `#` block.
-	- Acceptance signoff: Waiting. New API that changes what a program writes to disk.
-
 - C wrapper
 	- ID: 2026101512024159
 	- Type: Feature
@@ -393,6 +393,19 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Opened by: JC
 	- Parent ID: 2026101512024159
 	- Note: shcl keeps every string read until the document is freed. Folderkite saw 19 MB after 200,000 reads, so it releases reads after each one and compacts after a save.
+
+- FormatOf reads a Format line inside a raw block on 1.2 and 2.0
+	- ID: 2026101515553202
+	- Type: Bug
+	- Status: Queued
+	- Severity: Avg
+	- Opened: 20261015-155532
+	- Opened by: JC
+	- Steps to reproduce:
+		- On 1.2 or 2.0, open a file whose raw block has a `##    Format   9` line in its body, as in case 022.
+	- Incorrect behavior: `FormatOf` gives 9, so `Open` refuses the file as too new.
+	- Expected behavior: Lines inside a raw body don't count, the same as on 3.0.
+	- Note: found while building the info block. The block finder in `shclw/info.go` and `src/info.rs` already skips raw bodies.
 
 - Layered loading
 	- ID: 2026101512024156

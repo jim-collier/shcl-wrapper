@@ -88,8 +88,9 @@ func (d Diag) String() string {
 	return fmt.Sprintf("line %d: %s %s", d.Line, d.Code, d.Message)
 }
 
-// Got is a read with its status. Value is the zero value unless Status is
-// Good. Text is the value as typed in the file, when there was one.
+// Got is a read with its status. Check Status before trusting Value: an
+// array that reads as BadType still has its items, with 0 for the bad ones.
+// Text is the value as typed in the file, when there was one.
 type Got[T any] struct {
 	Value  T
 	Status Status

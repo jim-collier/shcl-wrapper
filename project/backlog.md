@@ -192,7 +192,7 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 - Put writes a float32 with float64 noise
 	- ID: 2026101513330006
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Severity: Avg
 	- Opened: 20261015-133300
 	- Opened by: JC
@@ -201,11 +201,21 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Incorrect behavior: The file says `0.8999999761581421`.
 	- Expected behavior: `0.9`, the shortest text that reads back as the same float32.
 	- Note: Mossrealm formats the value as text and parses it back before setting it. Wovenshell rounds to 3 places.
+	- Reproduced: 20261015, on 1.2, 2.0, and 3.0, in Go and Rust.
+	- Actual cause:
+		- The wrapper widened a float32 to float64 before setting it, and shcl wrote every digit of the wider value.
+	- Actual fix: A float32 goes in as its own shortest digits, read as a float64.
+	- Branch: floats
+	- Commit: 9b835f5
+	- Test case: Go `TestPutFloat32`, Rust `put_f32`. Both failed before the fix and pass after. The ops scripts have no float32 type.
+	- Swept: Go `Normalize` is the only float32 path. Rust has only `From<f32>`. Neither takes a float32 slice.
+	- Closed: 20261015-140716
+	- Acceptance signoff: Self-closed: did what the item asked, and its test failed before and passes after.
 
 - PutSyntax doesn't read its value back
 	- ID: 2026101513330007
 	- Type: Bug
-	- Status: Queued
+	- Status: Waiting on signoff
 	- Severity: Avg
 	- Opened: 20261015-133300
 	- Opened by: JC
@@ -214,11 +224,23 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Incorrect behavior: It says ok, and the value reads back as `a`.
 	- Expected behavior: `NoReadBack`, the same as Put.
 	- Note: Cobblevale reads its literal back and falls back to a plain string. Quillroute does the same for its single-quoted paths.
+	- Reproduced: 20261015, on 1.2, 2.0, and 3.0, in Go and Rust. `x#y` loses `#y` the same way.
+	- Actual cause:
+		- shcl reads the text as a value plus a trailing comment and drops the comment. The wrapper never read PutSyntax back.
+		- On 1.2 and 2.0, PutSyntax on a path with several instances also set the first one and said ok, where Put refuses.
+	- Actual fix: PutSyntax now sets the text in a new document and parses `k: text` in another, and the two have to match. The value at the path has to read the same as the parsed one. Otherwise it's `NoReadBack`, with the edit left in place. On 1.2 and 2.0 a path with several instances is `BadPath`, as with Put.
+	- Progress log:
+		- 20261015: the check also catches `[a, b]` on 1.2 and 2.0, which sets `"[a", "b]"` while a file line `k: [a, b]` reads another way. design.md lists both.
+	- Branch: floats
+	- Commit: 9b835f5
+	- Test case: tests/cases/012-syntax. It failed before the fix in Go and Rust on every version, and passes after.
+	- Swept: PutSyntax in Go `shclw1` to `shclw3` and Rust `v1` to `v3`. Comment has the same several-instances gap on 1.2 and 2.0, logged as 2026101514071600.
+	- Acceptance signoff: Waiting. The check is wider than the item asked, since it also flags 1.2 and 2.0 text a file reads another way.
 
 - Float reads take infinity as good
 	- ID: 2026101513330008
 	- Type: Bug
-	- Status: Queued
+	- Status: Waiting on signoff
 	- Severity: Avg
 	- Opened: 20261015-133300
 	- Opened by: JC
@@ -227,6 +249,34 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Incorrect behavior: `Good`, with infinity as the value.
 	- Expected behavior: `BadType`.
 	- Note: Wovenshell checks every float it reads. Cobblevale found a `NaN` put on 1.2 that reads back as `BadType`.
+	- Reproduced: 20261015, on 1.2 and 2.0, in Go and Rust. 3.0 already says `BadType`, and the fallback reads gave infinity too.
+	- Actual cause:
+		- shcl 1.2 and 2.0 read a number too big for a float as infinity. A put of infinity or NaN wrote it, then read it back as `BadType` and said `NoReadBack`, with the value left in the file.
+		- The ops scripts read `1e400` as infinity in Rust and as a bad value in Go.
+	- Decisions:
+		- A put of infinity or NaN is refused with `BadValue` in every version and changes nothing, as 3.0 does. design.md has it under Decisions.
+		- An array with a bad item reads as `BadType` and keeps its length, with 0 for the bad items, as 3.0 does.
+	- Actual fix: Float reads that find infinity or NaN say `BadType`, and the fallback reads give the fallback. Puts refuse them up front. Ops scripts take `nan`, `inf`, and `-inf`, and read a number too big as infinity in both languages.
+	- Progress log:
+		- 20261015: the fuzzer now makes these values and checks that no `Good` float read gives one.
+	- Branch: floats
+	- Commit: 9b835f5
+	- Test case: tests/cases/011-floats, plus the NaN and infinity half of Go `TestPutFloat32` and Rust `put_f32`. They failed before the fix on 1.2 and 2.0 in both languages, and pass after. On 3.0 only Go's 011 failed, on the ops parser, since 3.0 already refused these.
+	- Swept: GetFloat, GetFloats, Float, and Floats in Go `shclw1` to `shclw3` and Rust `v1` to `v3`. Put for float, float32, and float slices in both. Ints have no such value.
+	- Acceptance signoff: Waiting. Refusing a NaN or infinity put was a choice.
+
+- Comment on a path with several instances changes the first one on 1.2 and 2.0
+	- ID: 2026101514071600
+	- Type: Bug
+	- Status: Queued
+	- Severity: Low
+	- Opened: 20261015-140716
+	- Opened by: JC
+	- Related IDs: 2026101513330007
+	- Steps to reproduce:
+		- Comment on `n` in a file with `n: 1` and `n: 2`, on 1.2 or 2.0.
+	- Incorrect behavior: It says ok and puts the comment above the first `n`.
+	- Expected behavior: `BadPath`, as 3.0 does and as Put and PutSyntax do.
 
 - Layered loading
 	- ID: 2026101512024156

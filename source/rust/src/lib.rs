@@ -341,7 +341,9 @@ pub trait ShclDoc {
 	fn child(&self, base: &str, name: &str) -> String;
 
 	fn put(&mut self, path: &str, v: impl Into<Value>) -> Result<(), Error>;
-	/// Sets `path` to `text` read as shcl value syntax.
+	/// Sets `path` to `text` read as shcl value syntax. Text that doesn't
+	/// read back as typed, such as one with a trailing comment, is
+	/// `NoReadBack`, with the edit left in place.
 	fn put_syntax(&mut self, path: &str, text: &str) -> Result<(), Error>;
 	/// Sets the comment above `path`.
 	fn comment(&mut self, path: &str, text: &str) -> Result<(), Error>;

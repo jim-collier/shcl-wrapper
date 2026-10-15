@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use shclw::{verify_put, ErrKind, Lib, Value};
+use shclw::{verify_put, ErrKind, Lib, ShclDoc, Status, Value};
 
 fn check_verify<L: Lib>(n: u32) {
 	let d = L::parse("a: 1\n");
@@ -73,4 +73,35 @@ fn open() {
 		"v1 on a format 3 file"
 	);
 	let _ = fs::remove_dir_all(&dir); // only this test's own dir
+}
+
+/// An edit made through `inner_mut`, with calls the wrapper doesn't have,
+/// has to show up in the wrapper's own reads and text.
+fn check_inner<D: ShclDoc>(n: u32, d: &D, paths: &[String]) {
+	assert!(paths.iter().any(|p| p == "a"), "v{n}: inner().paths() = {paths:?}");
+	assert_eq!(d.get_str("a").status, Status::Empty, "v{n}: after set_empty");
+	assert_eq!(d.str("b", ""), "set inside", "v{n}: after set_string");
+	assert!(d.text().contains("set inside"), "v{n}: text() misses the inner edit");
+}
+
+#[test]
+fn inner() {
+	let mut d1 = shclw::v1::parse("a: 1\n");
+	assert!(d1.inner_mut().set_empty("a"), "v1 set_empty");
+	assert!(d1.inner_mut().set_string("b", "set inside"), "v1 set_string");
+	check_inner(1, &d1, &d1.inner().paths());
+
+	let mut d2 = shclw::v2::parse("a: 1\n");
+	assert!(d2.inner_mut().set_empty("a"), "v2 set_empty");
+	assert!(d2.inner_mut().set_string("b", "set inside"), "v2 set_string");
+	check_inner(2, &d2, &d2.inner().paths());
+
+	let mut d3 = shclw::v3::parse("a: 1\n");
+	assert_eq!(d3.inner_mut().set_empty("a"), shcl3::SetStatus::Ok, "v3 set_empty");
+	assert_eq!(
+		d3.inner_mut().set_string("b", "set inside"),
+		shcl3::SetStatus::Ok,
+		"v3 set_string"
+	);
+	check_inner(3, &d3, &d3.inner().paths());
 }

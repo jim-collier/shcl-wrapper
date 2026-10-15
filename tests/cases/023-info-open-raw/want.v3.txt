@@ -1,0 +1,16 @@
+> diags
+3	error	E005	unterminated raw block
+> info	on
+error refused
+> text
+| a: 1
+| b:
+| \t~~~
+| \traw
+> stamp
+error refused
+> text
+| a: 1
+| b:
+| \t~~~
+| \traw

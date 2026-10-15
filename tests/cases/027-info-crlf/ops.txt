@@ -1,0 +1,4 @@
+stamp
+text
+info	on
+text

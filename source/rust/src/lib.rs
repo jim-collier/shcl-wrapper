@@ -25,6 +25,9 @@ use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
+mod info;
+pub use info::{finish_info, info_text, Info, InfoEdit};
+
 /// How a read went. `BadPath` is new in shcl 3.0; older versions say
 /// `NotFound` for a path that doesn't parse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -375,6 +378,17 @@ pub trait ShclDoc {
 	/// Takes out `path` and everything under it, and says how many
 	/// instances went.
 	fn remove(&mut self, path: &str) -> usize;
+
+	/// Puts the info block at the end of what the save writes, or with `on`
+	/// false leaves it out. Either way an old block comes off first, in any
+	/// spelling shcl has written, wherever it is. A file whose Format line
+	/// names another format is refused, and so is one that ends in a raw
+	/// block that never closes.
+	fn info_block(&mut self, on: bool) -> Result<(), Error>;
+	/// Adds the Format line at the end of what the save writes, unless a
+	/// comment already names this format. It refuses what `info_block`
+	/// refuses.
+	fn stamp_format(&mut self) -> Result<(), Error>;
 }
 
 /// One module's package-level calls, for code that picks a shcl version at
@@ -1043,6 +1057,17 @@ impl<L: Lib> Runner<'_, L> {
 			"remove" => {
 				let n = self.doc.remove(arg(1));
 				self.say(&n.to_string());
+			}
+			"info" => match arg(1) {
+				"on" | "off" => {
+					let r = self.doc.info_block(arg(1) == "on");
+					self.result(r.err());
+				}
+				_ => self.say("error badvalue"),
+			},
+			"stamp" => {
+				let r = self.doc.stamp_format();
+				self.result(r.err());
 			}
 			"check" => self.check(arg(1), arg(2)),
 			"format" => self.say(&L::format_of(self.input).to_string()),

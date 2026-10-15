@@ -117,6 +117,14 @@ func (r *runner) op(f []string) {
 		r.result(d.Comment(arg(1), arg(2)))
 	case "remove":
 		r.out(strconv.Itoa(d.Remove(arg(1))))
+	case "info":
+		if arg(1) != "on" && arg(1) != "off" {
+			r.out("error badvalue")
+			return
+		}
+		r.result(d.InfoBlock(arg(1) == "on"))
+	case "stamp":
+		r.result(d.StampFormat())
 	case "check":
 		r.check(arg(1), arg(2))
 	case "format":

@@ -11,6 +11,7 @@ package shclw2
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	shcl "github.com/jim-collier/shcl/source/go/v2"
 	"github.com/jim-collier/shclwrap/source/go/shclw"
@@ -54,6 +55,8 @@ type Doc struct {
 	d *shcl.Document
 	// The loaded text wasn't canonical, so a save changes its lines.
 	rewrites bool
+	info     shclw.Info
+	stamp    bool
 }
 
 var _ shclw.Doc = (*Doc)(nil)
@@ -151,30 +154,53 @@ func UpgradeFile(path string, from int) (Upgraded, error) {
 func (d *Doc) Inner() *shcl.Document { return d.d }
 
 // Text is the document as it would be saved.
-func (d *Doc) Text() string { return d.d.ToCanonical() }
+func (d *Doc) Text() string { return d.finish() }
 
 // Canonical is the document in canonical form.
-func (d *Doc) Canonical() string { return d.d.ToCanonical() }
+func (d *Doc) Canonical() string { return d.finish() }
 
-// Write saves the document atomically. It refuses with ErrRefused when the
-// load dropped lines the save would lose.
+// finish is the save's text, with the info block and the Format line as
+// InfoBlock and StampFormat asked. When an edit since made that impossible,
+// it's the text without them, and Write says why.
+func (d *Doc) finish() string {
+	if text, err := d.saved(""); err == nil {
+		return text
+	}
+	return d.d.ToCanonical()
+}
+
+func (d *Doc) saved(path string) (string, error) {
+	text, err := shclw.FinishInfo(d.d.ToCanonical(), d.info, d.stamp, infoEdit)
+	if e, ok := err.(*shclw.Error); ok {
+		e.Path = path
+	}
+	return text, err
+}
+
+// Write saves Text atomically. It refuses with ErrRefused when the load
+// dropped lines the save would lose, the same check shcl's SaveFile makes,
+// and writes nothing when the info block or the Format line can't go in,
+// since an edit made after InfoBlock or StampFormat.
 func (d *Doc) Write(path string) error {
-	err := d.d.SaveFile(path)
-	if err == nil {
-		return nil
-	}
-	var refused *shcl.SaveRefused
-	if errors.As(err, &refused) {
+	if lost := d.d.LostCount(); lost > 0 {
 		return &shclw.Error{Kind: shclw.ErrRefused, Path: path,
-			Msg: fmt.Sprintf("%d lines would be lost", refused.Lost), Err: err}
+			Msg: fmt.Sprintf("%d lines would be lost", lost), Err: &shcl.SaveRefused{Path: path, Lost: lost}}
 	}
-	return &shclw.Error{Kind: shclw.ErrIO, Path: path, Err: err}
+	text, err := d.saved(path)
+	if err != nil {
+		return err
+	}
+	if err := shcl.WriteFileAtomic(path, text); err != nil {
+		return &shclw.Error{Kind: shclw.ErrIO, Path: path, Err: err}
+	}
+	return nil
 }
 
 // Rewrites says whether Write puts the canonical form in place of the lines
 // the document was loaded from. 2.0 only saves canonical form, so that's
 // any loaded text that wasn't canonical already. A New document has no
-// lines to keep.
+// lines to keep. InfoBlock and StampFormat change only their own lines,
+// so they don't change the answer.
 func (d *Doc) Rewrites() bool { return d.rewrites }
 
 // Diags is what the load found.
@@ -344,6 +370,34 @@ func (d *Doc) Comment(path, text string) error {
 // instances went.
 func (d *Doc) Remove(path string) int { return d.d.Remove(path) }
 
+// InfoBlock puts the info block at the end of what the save writes, naming
+// format 2, or with on false leaves it out. Either way an old block comes
+// off first, in any spelling shcl has written, wherever it is. A file whose
+// Format line names another format is refused, and so is one that ends in
+// a raw block that never closes.
+func (d *Doc) InfoBlock(on bool) error {
+	info := shclw.InfoOff
+	if on {
+		info = shclw.InfoOn
+	}
+	if _, err := shclw.FinishInfo(d.d.ToCanonical(), info, d.stamp, infoEdit); err != nil {
+		return err
+	}
+	d.info = info
+	return nil
+}
+
+// StampFormat adds the Format line at the end of what the save writes,
+// unless a comment already names format 2. It refuses what InfoBlock
+// refuses.
+func (d *Doc) StampFormat() error {
+	if _, err := shclw.FinishInfo(d.d.ToCanonical(), d.info, true, infoEdit); err != nil {
+		return err
+	}
+	d.stamp = true
+	return nil
+}
+
 // set is the one way an edit reaches the shcl document, so none can skip
 // the check that the path names one instance at every step. shcl 2.0
 // would edit the first one and say ok, where 3.0 refuses.
@@ -362,6 +416,28 @@ func (d *Doc) setErr(path string, ok bool) error {
 		return &shclw.Error{Kind: shclw.ErrBadPath, Path: path, Msg: r.String()}
 	}
 	return &shclw.Error{Kind: shclw.ErrBadValue, Path: path}
+}
+
+var infoEdit = shclw.InfoEdit{Block: shclw.InfoText(FormatMajor, "v"+ShclVersion), Major: FormatMajor, Values: values}
+
+// values is every path's values and the load's error codes, for
+// shclw.FinishInfo to tell a comment from a raw body's line.
+func values(text string) string {
+	d := shcl.Parse(text)
+	var b strings.Builder
+	for _, p := range d.Paths() {
+		b.WriteString(p)
+		for _, v := range d.Instances(p) {
+			b.WriteString("\x00" + v)
+		}
+		b.WriteString("\x01")
+	}
+	for _, x := range d.Diagnostics() {
+		if x.Severity == shcl.SeverityError {
+			b.WriteString(x.Code + "\x02")
+		}
+	}
+	return b.String()
 }
 
 var otherVersion = Diag{Severity: shclw.SevError, Code: "W001", Message: "schema is from another shcl version"}

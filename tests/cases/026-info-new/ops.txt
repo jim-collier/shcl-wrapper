@@ -1,0 +1,11 @@
+info	on
+text
+put	int	a	1
+text
+rewrites
+write	out.shcl
+parse
+stamp
+text
+put	int	a	1
+text

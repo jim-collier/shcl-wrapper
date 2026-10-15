@@ -1,0 +1,22 @@
+> info	on
+error refused
+> text
+| p: a, b
+| 
+| ##    Format   2
+> stamp
+error refused
+> info	off
+error refused
+> text
+| p: a, b
+| 
+| ##    Format   2
+> parse
+ok
+> stamp
+error refused
+> text
+| p: a, b
+| 
+| ##    Format   2

@@ -1,0 +1,20 @@
+> stamp
+ok
+> text
+| a: 1\r
+| b: 2\r
+| ##    Format   3\r
+> info	on
+ok
+> text
+| a: 1\r
+| b: 2\r
+| \r
+| ##\r
+| ## This config file format is SHCL.\r
+| ## "Simple Hierarchical Config Language"\r
+| ##    Format   3\r
+| ##    Home     https://github.com/yottacore/shcl\r
+| ##    Syntax   https://github.com/yottacore/shcl/blob/v3.0.0-beta1/project/spec.md\r
+| ##    Legal    SHCL is Copyright © 2026 Jim Collier [ID: 2უNაɘ«҂թȹɤξπ๙¿ձϖ]. License: MIT. No warranty.\r
+| ##\r

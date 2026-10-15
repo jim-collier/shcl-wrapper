@@ -24,6 +24,17 @@ VERSIONS = (1, 2, 3)
 NAMES = ("a", "b", "port", "name", "Server", "host", "tags", "x-y", "n_1", "list", "on")
 WORDS = ("alpha", "beta", "two words", "café", "x#y", "a # b", "a, b", "'q'", '"dq"', "C:\\temp", "", " pad ")
 TYPES = ("int", "float", "bool", "str", "strs", "ints", "floats", "raw")
+TITLE = "This config file format is SHCL."
+# The info block's spellings over time, 2.x's first. {n} is a format.
+INFO_BLOCKS = (
+	("#", "", "jim-collier", "main", ""),
+	("##", "", "jim-collier", "main", ""),
+	("##", "", "jim-collier", "main", " [ID: x]"),
+	("##", "{n}", "jim-collier", "main", " [ID: x]"),
+	("##", "{n}", "jim-collier", "v3.0.0", " [ID: x]"),
+	("##", "{n}", "yottacore", "v3.0.0", " [ID: x]"),
+	("##", "{n}", "yottacore", "v3.0.0-beta1", " [ID: x]"),
+)
 
 
 @dataclass
@@ -35,6 +46,9 @@ class Case:
 	puts: list[tuple[int, str, str, list[str]]] = field(default_factory=list)
 	# Each edit's first count probe, how many there are, and the edit's index.
 	edits: list[tuple[int, int, int]] = field(default_factory=list)
+	# The doc may hold the block's title as a raw body's text, or as a
+	# mutation left it, so a saved text can't be checked for one title.
+	stray_titles: bool = False
 
 
 def gen_scalar(rng: random.Random) -> str:
@@ -78,12 +92,37 @@ def gen_block(rng: random.Random, version: int, depth: int, out: list[str]) -> N
 			out.append(f"{pad}{name}: {gen_scalar(rng)}".rstrip())
 
 
-def gen_doc(rng: random.Random, version: int) -> str:
+def gen_info(rng: random.Random, version: int) -> list[str]:
+	mark, fmt, home, tag, legal_id = rng.choice(INFO_BLOCKS)
+	n = version if rng.random() < 0.8 else rng.choice(VERSIONS)
+	lines = [mark, f"{mark} {TITLE}", f'{mark} "Simple Hierarchical Config Language"']
+	if fmt:
+		lines.append(f"{mark}    Format   {n}")
+	lines += [
+		f"{mark}    Home     https://github.com/{home}/shcl",
+		f"{mark}    Syntax   https://github.com/{home}/shcl/blob/{tag}/project/spec.md",
+		f"{mark}    Legal    SHCL is Copyright © 2026 Jim Collier{legal_id}. License: MIT. No warranty.",
+		mark,
+	]
+	if rng.random() < 0.1:
+		del lines[-1]
+	return lines
+
+
+def gen_doc(rng: random.Random, version: int) -> tuple[str, bool]:
 	lines: list[str] = []
 	gen_block(rng, version, 0, lines)
 	if version >= 3 and rng.random() < 0.2:
 		lines.append("##    Format   3")
-	return "\n".join(lines) + ("\n" if rng.random() < 0.9 else "")
+	stray = False
+	if rng.random() < 0.1:
+		# A raw body holding the block's text is the body's, not a block.
+		lines += ["tmpl:", "\t~~~", "##", f"## {TITLE}", f"##    Format   {version}", "##", "\t~~~"]
+		stray = True
+	if rng.random() < 0.3:
+		at = rng.choice((0, len(lines), rng.randrange(len(lines) + 1)))
+		lines[at:at] = gen_info(rng, version)
+	return "\n".join(lines) + ("\n" if rng.random() < 0.9 else ""), stray
 
 
 def gen_parts(rng: random.Random) -> list[str]:
@@ -129,14 +168,17 @@ def gen_case(seed: int, corpus: list[str]) -> Case:
 	rng = random.Random(seed)
 	version = rng.choice(VERSIONS)
 	if corpus and rng.random() < 0.25:
-		doc = mutate(rng, rng.choice(corpus))
+		doc, stray = mutate(rng, rng.choice(corpus)), True
 	else:
-		doc = gen_doc(rng, version)
-	case = Case(seed=seed, version=version, doc=doc, script="")
+		doc, stray = gen_doc(rng, version)
+	case = Case(seed=seed, version=version, doc=doc, script="", stray_titles=stray)
 	ops: list[str] = []
 	for _ in range(rng.randrange(3, 20)):
 		roll = rng.random()
-		if roll < 0.35:
+		if roll < 0.05:
+			# Twice, for check_info: the second changes nothing.
+			ops += ["info\ton", "text", "info\ton", "text"]
+		elif roll < 0.35:
 			ops.append(f"get\t{rng.choice(TYPES)}\t{gen_path(rng)}")
 		elif roll < 0.47:
 			typ = rng.choice(TYPES[:-1])
@@ -172,6 +214,8 @@ def gen_case(seed: int, corpus: list[str]) -> Case:
 						f"remove\t{gen_path(rng)}",
 						f"comment\t{gen_path(rng)}\t{rng.choice(WORDS)}",
 						f"syntax\t{gen_path(rng)}\t{rng.choice(WORDS)}",
+						f"info\t{rng.choice(('on', 'off'))}",
+						"stamp",
 						"text",
 						"canonical",
 						"rewrites",
@@ -331,6 +375,29 @@ def check_picks(output: str) -> list[str]:
 	return problems
 
 
+def check_info(case: Case, output: str) -> list[str]:
+	"""Text right after an info on that said ok ends with one block naming
+	the version's format, and a second info on changes nothing."""
+	problems = []
+	blocks = [b.removeprefix("> ").split("\n") for b in output.split("\n> ")]
+	texts: dict[int, list[str]] = {}
+	for i, (op, cur) in enumerate(pairwise(blocks)):
+		if op[0] != "info\ton" or op[1:2] != ["ok"] or cur[0] != "text":
+			continue
+		body = [line.removeprefix("| ").removesuffix("\\r") for line in cur[1:] if line.startswith("| ")]
+		texts[i] = body
+		tail = body[-8:]
+		want = ["##", f"## {TITLE}", f"##    Format   {case.version}", "##"]
+		if len(tail) < 8 or [tail[0], tail[1], tail[3], tail[7]] != want:
+			problems.append(f"text after info on #{i} ends {tail!r}")
+		titles = sum(line.strip(" \t").endswith(" " + TITLE) for line in body)
+		if not case.stray_titles and titles != 1:
+			problems.append(f"text after info on #{i} has {titles} info blocks")
+		if i - 2 in texts and blocks[i - 1][0] == "text" and texts[i - 2] != body:
+			problems.append(f"a second info on #{i} changed the text")
+	return problems
+
+
 def run_driver(cmd: list[str], version: int, doc: Path, work: Path, script: str) -> tuple[int, str, str]:
 	if work.exists():
 		shutil.rmtree(work)
@@ -396,6 +463,7 @@ def main() -> int:
 				problems += check_edits(case, go[1])
 				problems += check_finite(go[1])
 				problems += check_picks(go[1])
+				problems += check_info(case, go[1])
 			for line in go[1].split("\n"):
 				if line.startswith(("Good\t", "Empty\t", "NotFound\t", "BadType\t", "Multiple\t", "BadPath\t")):
 					gets += 1

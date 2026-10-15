@@ -1,0 +1,5 @@
+# The block 2.0 writes. 3.0 upgrades the file by its Format line.
+format
+upgrade
+info	on
+text

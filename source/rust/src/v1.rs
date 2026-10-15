@@ -24,6 +24,8 @@ pub struct Doc {
 	d: shcl::Document,
 	/// The loaded text wasn't canonical, so a save changes its lines.
 	rewrites: bool,
+	info: crate::Info,
+	stamp: bool,
 }
 
 /// This module's calls as a [`crate::Lib`].
@@ -53,6 +55,8 @@ pub fn new() -> Doc {
 	Doc {
 		d: shcl::Document::new(),
 		rewrites: false,
+		info: crate::Info::AsIs,
+		stamp: false,
 	}
 }
 
@@ -82,7 +86,12 @@ fn parse_keep(text: &str, level: Strictness) -> (Doc, Option<Error>) {
 
 fn loaded(d: shcl::Document, text: &str) -> Doc {
 	let rewrites = d.to_canonical() != text;
-	Doc { d, rewrites }
+	Doc {
+		d,
+		rewrites,
+		info: crate::Info::AsIs,
+		stamp: false,
+	}
 }
 
 /// Reads and parses a file. A missing file is `NotFound`, and a file
@@ -126,7 +135,50 @@ pub fn upgrade_file(path: &str, from: u32) -> Result<Upgraded, Error> {
 	upgrade(&text, from).map_err(|e| e.path(path))
 }
 
+fn info_edit() -> crate::InfoEdit<'static> {
+	static BLOCK: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+	crate::InfoEdit {
+		block: BLOCK.get_or_init(|| crate::info_text(FORMAT_MAJOR, "v1.2.0")),
+		major: FORMAT_MAJOR,
+		values,
+	}
+}
+
+/// Every path's values and the load's error codes, for `crate::finish_info`
+/// to tell a comment from a raw body's line.
+fn values(text: &str) -> String {
+	let d = shcl::Document::parse(text);
+	let mut s = String::new();
+	for p in d.paths() {
+		s.push_str(&p);
+		for v in d.instances(&p) {
+			s.push('\0');
+			s.push_str(&v);
+		}
+		s.push('\x01');
+	}
+	for x in d.diagnostics() {
+		if x.severity == shcl::Severity::Error {
+			s.push_str(x.code);
+			s.push('\x02');
+		}
+	}
+	s
+}
+
 impl Doc {
+	/// The save's text, with the info block and the Format line as
+	/// `info_block` and `stamp_format` asked.
+	fn saved(&self, path: &str) -> Result<String, Error> {
+		crate::finish_info(&self.d.to_canonical(), self.info, self.stamp, &info_edit()).map_err(|e| e.path(path))
+	}
+
+	/// `saved`, or the text without the block and the line when an edit since
+	/// made them impossible, which `write` reports.
+	fn finish(&self) -> String {
+		self.saved("").unwrap_or_else(|_| self.d.to_canonical())
+	}
+
 	/// The shcl document underneath, for calls shclw doesn't cover.
 	pub fn inner(&self) -> &shcl::Document {
 		&self.d
@@ -161,19 +213,23 @@ impl Doc {
 
 impl ShclDoc for Doc {
 	fn text(&self) -> String {
-		self.d.to_canonical()
+		self.finish()
 	}
 
 	fn canonical(&self) -> String {
-		self.d.to_canonical()
+		self.finish()
 	}
 
+	/// Writes nothing when the info block or the Format line can't go in,
+	/// since an edit made after `info_block` or `stamp_format`.
 	fn write(&self, path: &str) -> Result<(), Error> {
-		crate::write_atomic(path, &self.d.to_canonical())
+		crate::write_atomic(path, &self.saved(path)?)
 	}
 
 	/// 1.2 only saves canonical form, so this is any loaded text that
 	/// wasn't canonical already. A `new` document has no lines to keep.
+	/// `info_block` and `stamp_format` change only their own lines, so they
+	/// don't change the answer.
 	fn rewrites(&self) -> bool {
 		self.rewrites
 	}
@@ -343,6 +399,19 @@ impl ShclDoc for Doc {
 
 	fn remove(&mut self, path: &str) -> usize {
 		self.d.remove(path)
+	}
+
+	fn info_block(&mut self, on: bool) -> Result<(), Error> {
+		let info = if on { crate::Info::On } else { crate::Info::Off };
+		crate::finish_info(&self.d.to_canonical(), info, self.stamp, &info_edit())?;
+		self.info = info;
+		Ok(())
+	}
+
+	fn stamp_format(&mut self) -> Result<(), Error> {
+		crate::finish_info(&self.d.to_canonical(), self.info, true, &info_edit())?;
+		self.stamp = true;
+		Ok(())
 	}
 }
 

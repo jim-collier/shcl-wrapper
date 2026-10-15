@@ -92,7 +92,7 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Branch: shclwrap
 	- Commit: 3f6eb38
 	- Test case: none of its own, since it's a rename. The cicd gate passes on the renamed module.
-	- Swept: `git grep -iE 'shcl-wrapper|shcl_wrapper'` finds nothing.
+	- Swept: `git grep -iE 'shcl[-_]wrapper'` finds nothing.
 	- Closed: 20261015-135423
 	- Acceptance signoff: Self-closed: mechanical rename.
 

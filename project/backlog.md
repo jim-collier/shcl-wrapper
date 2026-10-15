@@ -41,7 +41,7 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- 20261015: built, with `Inner()` for the rest of shcl and `Run` for ops scripts. The calls are listed in design.md.
 		- 20261015: design.md lists where shcl versions behave differently and what the wrapper does instead.
 	- Branch: go-rust
-	- Test case: tests/cases 001 to 010, Go `api_test.go`, Rust `tests/api.rs`
+	- Test case: tests/cases 001 to 010, Go `api_test.go` and `inner_test.go`, Rust `tests/api.rs`
 
 - CICD pipeline with shared cases and fuzzing
 	- ID: 2026101512024152

@@ -196,7 +196,7 @@ Each row has a test, either a shared case or an API test.
 | :---                                     | :---                                                               | :---
 | `Names` on a path with several instances | 1.2 and 2.0 give nothing. 3.0 lists every instance's children.     | Lists every instance's children, everywhere.
 | `Names` with a name given twice          | Lists it once per line.                                            | Lists it once.
-| `Put` on a path with several instances   | 1.2 and 2.0 set something and say ok. 3.0 refuses.                 | Refuses with `BadPath`, everywhere, and changes nothing. `PutSyntax` too.
+| `Put` on a path with several instances   | 1.2 and 2.0 set something and say ok. 3.0 refuses.                 | Refuses with `BadPath`, everywhere, and changes nothing. `PutSyntax` and `Comment` too.
 | A put that doesn't read back the same    | Says ok.                                                           | Reads every put back. A mismatch is `NoReadBack`, with the edit left in place.
 | `PutSyntax` text with a trailing comment | Drops the comment and says ok.                                     | `NoReadBack`, with the edit left in place.
 | `PutSyntax` of `[a, b]` on 1.2 and 2.0   | Sets `"[a", "b]"`, which a file line `k: [a, b]` doesn't mean.     | `NoReadBack`, with the edit left in place.

@@ -136,6 +136,15 @@ impl Doc {
 		&mut self.d
 	}
 
+	/// Refuses a path with several instances. shcl 2.0 would set the first
+	/// one and say ok, where 3.0 refuses.
+	fn only_one(&self, path: &str) -> Result<(), Error> {
+		if self.d.count(path) > 1 {
+			return Err(Error::new(ErrKind::BadPath).path(path).msg("Multiple"));
+		}
+		Ok(())
+	}
+
 	fn set_err(&self, path: &str, ok: bool) -> Result<(), Error> {
 		if ok {
 			return Ok(());
@@ -309,9 +318,7 @@ impl ShclDoc for Doc {
 	fn put(&mut self, path: &str, v: impl Into<Value>) -> Result<(), Error> {
 		let v = v.into();
 		crate::check_value(path, &v)?;
-		if self.d.count(path) > 1 {
-			return Err(Error::new(ErrKind::BadPath).path(path).msg("Multiple"));
-		}
+		self.only_one(path)?;
 		let ok = match &v {
 			Value::Int(x) => self.d.set_int(path, *x),
 			Value::Float(x) => self.d.set_float(path, *x),
@@ -329,9 +336,7 @@ impl ShclDoc for Doc {
 	}
 
 	fn put_syntax(&mut self, path: &str, text: &str) -> Result<(), Error> {
-		if self.d.count(path) > 1 {
-			return Err(Error::new(ErrKind::BadPath).path(path).msg("Multiple"));
-		}
+		self.only_one(path)?;
 		let ok = self.d.set_literal(path, text);
 		self.set_err(path, ok)?;
 		let mut alone = new();
@@ -341,6 +346,7 @@ impl ShclDoc for Doc {
 	}
 
 	fn comment(&mut self, path: &str, text: &str) -> Result<(), Error> {
+		self.only_one(path)?;
 		let ok = self.d.set_comment(path, text);
 		self.set_err(path, ok)
 	}

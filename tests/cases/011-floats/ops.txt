@@ -1,0 +1,19 @@
+get	float	big
+get	float	small
+get	float	tiny
+get	floats	list
+or	float	big	7
+or	floats	list	7	8
+or	float	missing	1e400
+put	float	ok	inf
+put	float	ok	-inf
+put	float	ok	nan
+put	float	ok	1e400
+put	floats	list2	1	nan
+put	float	new	inf
+put	float	twice	inf
+put	float	twice	1.5
+get	float	ok
+has	new
+has	list2
+text

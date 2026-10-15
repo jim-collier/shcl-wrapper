@@ -4,7 +4,9 @@
 package shclw
 
 import (
+	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -354,14 +356,24 @@ func parseValue(typ string, f []string) (any, bool) {
 	return nil, false
 }
 
-// parseFloat takes plain decimal and exponent forms only. Each language's
-// own parser takes a different set of spellings for infinity and NaN.
+// parseFloat takes plain decimal and exponent forms, plus nan, inf, and
+// -inf as FormatFloat writes them. Each language's own parser takes a
+// different set of spellings for those. A number too big is infinity, as
+// Rust reads it.
 func parseFloat(s string) (float64, bool) {
+	switch s {
+	case "nan":
+		return math.NaN(), true
+	case "inf":
+		return math.Inf(1), true
+	case "-inf":
+		return math.Inf(-1), true
+	}
 	if s == "" || strings.ContainsAny(s, "xXpP_") || strings.ContainsFunc(s, isLetterNotE) {
 		return 0, false
 	}
 	x, err := strconv.ParseFloat(s, 64)
-	return x, err == nil
+	return x, err == nil || errors.Is(err, strconv.ErrRange)
 }
 
 func isLetterNotE(r rune) bool {

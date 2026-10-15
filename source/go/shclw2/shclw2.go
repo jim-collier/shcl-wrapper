@@ -187,27 +187,42 @@ func (d *Doc) DropDeclared(ds []Diag) []Diag {
 	return diags(shcl.SuppressDeclaredReopens(d.d, in))
 }
 
-func (d *Doc) Int(path string, fallback int64) int64       { return d.d.GetIntOr(path, fallback) }
-func (d *Doc) Float(path string, fallback float64) float64 { return d.d.GetFloatOr(path, fallback) }
-func (d *Doc) Bool(path string, fallback bool) bool        { return d.d.GetBoolOr(path, fallback) }
-func (d *Doc) Str(path string, fallback string) string     { return d.d.GetStringOr(path, fallback) }
+func (d *Doc) Int(path string, fallback int64) int64   { return d.d.GetIntOr(path, fallback) }
+func (d *Doc) Bool(path string, fallback bool) bool    { return d.d.GetBoolOr(path, fallback) }
+func (d *Doc) Str(path string, fallback string) string { return d.d.GetStringOr(path, fallback) }
 func (d *Doc) Strs(path string, fallback []string) []string {
 	return d.d.GetStringArrayOr(path, fallback)
 }
 func (d *Doc) Ints(path string, fallback []int64) []int64 { return d.d.GetIntArrayOr(path, fallback) }
 func (d *Doc) Raw(path string, fallback string) string    { return d.d.GetRawOr(path, fallback) }
-func (d *Doc) Floats(path string, fallback []float64) []float64 {
-	return d.d.GetFloatArrayOr(path, fallback)
+
+// Float and Floats go through GetFloat, so infinity gets the fallback too.
+func (d *Doc) Float(path string, fallback float64) float64 {
+	if g := d.GetFloat(path); g.Ok() {
+		return g.Value
+	}
+	return fallback
 }
 
-func (d *Doc) GetInt(path string) shclw.Got[int64]        { return got(d.d.ReadInt(path)) }
-func (d *Doc) GetFloat(path string) shclw.Got[float64]    { return got(d.d.ReadFloat(path)) }
-func (d *Doc) GetBool(path string) shclw.Got[bool]        { return got(d.d.ReadBool(path)) }
-func (d *Doc) GetStr(path string) shclw.Got[string]       { return got(d.d.ReadString(path)) }
-func (d *Doc) GetStrs(path string) shclw.Got[[]string]    { return got(d.d.ReadStringArray(path)) }
-func (d *Doc) GetInts(path string) shclw.Got[[]int64]     { return got(d.d.ReadIntArray(path)) }
-func (d *Doc) GetFloats(path string) shclw.Got[[]float64] { return got(d.d.ReadFloatArray(path)) }
-func (d *Doc) GetRaw(path string) shclw.Got[string]       { return got(d.d.ReadRaw(path)) }
+func (d *Doc) Floats(path string, fallback []float64) []float64 {
+	if g := d.GetFloats(path); g.Ok() {
+		return g.Value
+	}
+	return fallback
+}
+
+func (d *Doc) GetInt(path string) shclw.Got[int64] { return got(d.d.ReadInt(path)) }
+func (d *Doc) GetFloat(path string) shclw.Got[float64] {
+	return shclw.FiniteFloat(got(d.d.ReadFloat(path)))
+}
+func (d *Doc) GetBool(path string) shclw.Got[bool]     { return got(d.d.ReadBool(path)) }
+func (d *Doc) GetStr(path string) shclw.Got[string]    { return got(d.d.ReadString(path)) }
+func (d *Doc) GetStrs(path string) shclw.Got[[]string] { return got(d.d.ReadStringArray(path)) }
+func (d *Doc) GetInts(path string) shclw.Got[[]int64]  { return got(d.d.ReadIntArray(path)) }
+func (d *Doc) GetFloats(path string) shclw.Got[[]float64] {
+	return shclw.FiniteFloats(got(d.d.ReadFloatArray(path)))
+}
+func (d *Doc) GetRaw(path string) shclw.Got[string] { return got(d.d.ReadRaw(path)) }
 
 func (d *Doc) Has(path string) bool  { return d.d.Exists(path) }
 func (d *Doc) Count(path string) int { return d.d.Count(path) }
@@ -287,8 +302,21 @@ func (d *Doc) Put(path string, v any) error {
 	return shclw.VerifyPut(d, path, val)
 }
 
-// PutSyntax sets path to text read as shcl value syntax.
-func (d *Doc) PutSyntax(path, text string) error { return d.setErr(path, d.d.SetLiteral(path, text)) }
+// PutSyntax sets path to text read as shcl value syntax. Text that doesn't
+// read back as typed, such as one with a trailing comment, is
+// ErrNoReadBack, with the edit left in place.
+func (d *Doc) PutSyntax(path, text string) error {
+	if d.d.Count(path) > 1 {
+		return &shclw.Error{Kind: shclw.ErrBadPath, Path: path, Msg: "Multiple"}
+	}
+	if err := d.setErr(path, d.d.SetLiteral(path, text)); err != nil {
+		return err
+	}
+	alone := New()
+	// A failed set leaves alone empty, which the check reports.
+	alone.d.SetLiteral("k", text)
+	return shclw.VerifySyntax(d, path, alone, Parse("k: "+text+"\n"))
+}
 
 // Comment sets the comment above path.
 func (d *Doc) Comment(path, text string) error { return d.setErr(path, d.d.SetComment(path, text)) }

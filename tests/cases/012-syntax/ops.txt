@@ -1,0 +1,21 @@
+syntax	a	a # b
+get	str	a
+syntax	b	x#y
+get	str	b
+syntax	c	[a, b] # c
+syntax	d	"a # b"
+get	str	d
+syntax	e	'q'
+get	str	e
+syntax	f	  pad  
+get	str	f
+syntax	g	
+get	str	g
+syntax	h	[a, b]
+get	strs	h
+syntax	i	# only
+syntax	n	5
+get	int	n
+syntax	keep	2 # two
+get	int	keep
+text

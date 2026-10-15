@@ -507,6 +507,69 @@ func WriteAtomic(path, data string) error {
 	return nil
 }
 
+// Unchanged is whether path still holds was, byte for byte.
+func Unchanged(path, was string) bool {
+	b, err := os.ReadFile(path)
+	return err == nil && string(b) == was
+}
+
+// ReplaceRead writes data over path, where was is the text last read from
+// it. A file that has changed since is left alone, checked before the
+// backup and again before the write. backup, when not nil, keeps was first
+// and gives the copy's name, which ReplaceRead returns. When the write
+// fails, the original stays or is put back from the backup, and then the
+// backup goes. Only when neither works is the backup kept, and the error
+// names it.
+func ReplaceRead(path, was, data string, backup func() (string, error), write func(path, data string) error) (string, error) {
+	changed := func() error {
+		return &Error{Kind: ErrIO, Path: path, Msg: "changed since it was read; nothing written"}
+	}
+	if !Unchanged(path, was) {
+		return "", changed()
+	}
+	name := ""
+	if backup != nil {
+		var err error
+		if name, err = backup(); err != nil {
+			return "", err
+		}
+	}
+	drop := func() {
+		if name != "" {
+			os.Remove(name) // a copy of what's still at path
+		}
+	}
+	if !Unchanged(path, was) {
+		drop()
+		return "", changed()
+	}
+	err := write(path, data)
+	if err == nil {
+		return name, nil
+	}
+	var e *Error
+	if !errors.As(err, &e) {
+		e = &Error{Kind: ErrIO, Path: path, Err: err}
+	}
+	if Unchanged(path, was) {
+		drop()
+		return "", e
+	}
+	if name == "" {
+		return "", e
+	}
+	// A replace that fails part way on Windows can leave nothing at path.
+	note := "the original is " + name
+	if _, serr := os.Lstat(path); errors.Is(serr, fs.ErrNotExist) && os.Rename(name, path) == nil {
+		note = "the original was put back"
+	}
+	if e.Msg != "" {
+		note = e.Msg + "; " + note
+	}
+	e.Msg = note
+	return "", e
+}
+
 // FormatFloat writes a float the same way in every wrapper language: the
 // shortest digits that read back exactly, positional between 1e-5 and
 // 1e17, else with an exponent.

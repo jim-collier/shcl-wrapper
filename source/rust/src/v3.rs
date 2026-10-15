@@ -121,28 +121,41 @@ pub fn upgrade(text: &str, from: u32) -> Result<Upgraded, Error> {
 }
 
 /// `upgrade` on a file. When it changes the file it first copies the
-/// original beside it, and `backup` names the copy.
+/// original beside it, and `backup` names the copy. A file that changed
+/// after it was read is left alone, and a failed write leaves the original
+/// in place (`crate::replace_read`).
 pub fn upgrade_file(path: &str, from: u32) -> Result<Upgraded, Error> {
 	if from > FORMAT_MAJOR {
 		return Err(too_new(from).path(path));
 	}
-	let from_v2 = from > 0 && from < FORMAT_MAJOR;
-	// shcl writes the file itself, so this has to come first. A file that
-	// won't read gets shcl's own error below.
-	if let Ok(text) = crate::read_text(path) {
-		if let Some(e) = old_errors(&text, from_v2, &shcl::upgrade(&text, from_v2)) {
-			return Err(e.path(path));
-		}
+	// A FIFO would block the read, and the write would put a file in place
+	// of a device.
+	if std::fs::metadata(path).is_ok_and(|m| !m.is_file()) {
+		return Err(Error::new(ErrKind::Io).path(path).msg("not a regular file"));
 	}
-	shcl::upgrade_file(path, from_v2).map(upgraded).map_err(|e| {
-		let kind = match &e {
-			shcl::UpgradeError::NotFound(_) => ErrKind::NotFound,
-			shcl::UpgradeError::Ambiguous { .. } => ErrKind::Ambiguous,
-			shcl::UpgradeError::BackupTaken(_) => ErrKind::BackupTaken,
-			shcl::UpgradeError::Io(_) => ErrKind::Io,
-		};
-		Error::new(kind).path(path).msg(e.to_string())
-	})
+	// One read for the 2.0 check, the conversion, and the backup. shcl's own
+	// upgrade_file would read the file a second time, after the check.
+	let text = crate::read_text(path)?;
+	let mut u = upgrade(&text, from).map_err(|e| e.path(path))?;
+	if !u.changed {
+		return Ok(u);
+	}
+	let backup = || {
+		shcl::write_backup(path, &text, u.from).map_err(|e| {
+			let kind = match &e {
+				shcl::UpgradeError::BackupTaken(_) => ErrKind::BackupTaken,
+				shcl::UpgradeError::NotFound(_) | shcl::UpgradeError::Ambiguous { .. } | shcl::UpgradeError::Io(_) => {
+					ErrKind::Io
+				}
+			};
+			Error::new(kind).path(path).msg(e.to_string())
+		})
+	};
+	let write = |path: &str, data: &str| {
+		shcl::write_file_atomic(path, data).map_err(|e| Error::new(ErrKind::Io).path(path).msg(e.to_string()))
+	};
+	u.backup = crate::replace_read(path, &text, &u.text, backup, write)?;
+	Ok(u)
 }
 
 /// Refuses a file taken as 2.x that shcl 2.0 reports errors on. The old

@@ -1,0 +1,3 @@
+remove	a
+write	out.shcl
+errors

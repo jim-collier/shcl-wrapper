@@ -1,0 +1,6 @@
+> remove	a
+1
+> write	out.shcl
+error refused
+> errors
+1

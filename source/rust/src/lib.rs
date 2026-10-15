@@ -545,6 +545,68 @@ pub fn write_atomic(path: &str, data: &str) -> Result<(), Error> {
 	Ok(())
 }
 
+/// Whether `path` still holds `was`, byte for byte.
+pub fn unchanged(path: &str, was: &str) -> bool {
+	fs::read(path).is_ok_and(|b| b == was.as_bytes())
+}
+
+/// Writes `data` over `path`, where `was` is the text last read from it. A
+/// file that has changed since is left alone, checked before the backup and
+/// again before the write. `backup` keeps `was` first and gives the copy's
+/// name, or an empty name for none, which this returns. When the write
+/// fails, the original stays or is put back from the backup, and then the
+/// backup goes. Only when neither works is the backup kept, and the error
+/// names it.
+pub fn replace_read(
+	path: &str,
+	was: &str,
+	data: &str,
+	backup: impl FnOnce() -> Result<String, Error>,
+	write: impl FnOnce(&str, &str) -> Result<(), Error>,
+) -> Result<String, Error> {
+	let changed = || {
+		Error::new(ErrKind::Io)
+			.path(path)
+			.msg("changed since it was read; nothing written")
+	};
+	if !unchanged(path, was) {
+		return Err(changed());
+	}
+	let name = backup()?;
+	let drop_backup = || {
+		if !name.is_empty() {
+			let _ = fs::remove_file(&name); // a copy of what's still at path
+		}
+	};
+	if !unchanged(path, was) {
+		drop_backup();
+		return Err(changed());
+	}
+	let Err(mut e) = write(path, data) else {
+		return Ok(name);
+	};
+	if unchanged(path, was) {
+		drop_backup();
+		return Err(e);
+	}
+	if name.is_empty() {
+		return Err(e);
+	}
+	// A replace that fails part way on Windows can leave nothing at path.
+	let gone = matches!(fs::symlink_metadata(path), Err(m) if m.kind() == std::io::ErrorKind::NotFound);
+	let note = if gone && fs::rename(&name, path).is_ok() {
+		"the original was put back".to_owned()
+	} else {
+		format!("the original is {name}")
+	};
+	e.msg = if e.msg.is_empty() {
+		note
+	} else {
+		format!("{}; {note}", e.msg)
+	};
+	Err(e)
+}
+
 /// Writes a float the same way in every wrapper language: the shortest
 /// digits that read back exactly, positional between 1e-5 and 1e17, else
 /// with an exponent.

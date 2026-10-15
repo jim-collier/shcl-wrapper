@@ -188,6 +188,7 @@ Go names are listed. Rust uses the same words in snake case, and `ShclDoc` has t
 ### Format and upgrade
 
 - `FormatOf(text)` is the format a file's `##    Format   N` line names, or 0.
+	- 1.2 and 2.0 don't read the line, so the wrapper reads it as 3.0 does: indented or not, digits only. One in a raw body is the body's, and doesn't count. With several, the first naming the bound format or newer wins, else the highest.
 
 - `Upgrade(text, from)` and `UpgradeFile(path, from)` move a file to the bound shcl's format.
 	- With `from` 0 the Format line decides, and a file with none is taken as current.
@@ -249,7 +250,7 @@ Each row has a test, either a shared case or an API test.
 | `PutSyntax` of `[a, b]` on 1.2 and 2.0   | Sets `"[a", "b]"`, which a file line `k: [a, b]` doesn't mean.     | `NoReadBack`, with the edit left in place.
 | A float like `1e400` in the file         | 1.2 and 2.0 read infinity as `Good`. 3.0 says `BadType`.           | `BadType`, everywhere. An array keeps its length, with 0 for the bad items, as in 3.0.
 | A put of infinity or NaN                 | 1.2 and 2.0 write it, and it reads back as `BadType`. 3.0 refuses. | Refuses with `BadValue`, everywhere, and changes nothing.
-| Opening a newer format's file            | 1.2 and 2.0 read it, wrongly.                                      | `ErrTooNew`.
+| Opening a newer format's file            | 1.2 and 2.0 read it, wrongly.                                      | `ErrTooNew`. A Format line in a raw body doesn't count, as in 3.0.
 | Upgrading a 2.x file 2.0 had errors on   | 3.0 writes a clean file, with nothing lost and no error.           | Refuses with `ErrRefused` and leaves the file alone.
 | The info block on 1.2 and 2.0            | No call. Their `init` wrote a `#` block with no Format line.       | `InfoBlock` writes the `##` block naming the bound format.
 | An old info block above the first field  | 3.0's `SetBanner` leaves it and adds a second block.               | `InfoBlock` takes it off, everywhere.

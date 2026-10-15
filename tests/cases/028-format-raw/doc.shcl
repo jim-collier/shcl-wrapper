@@ -1,0 +1,9 @@
+a: 1
+tmpl:
+	~~~
+##
+## This config file format is SHCL.
+##    Format   9
+##
+	~~~
+b: 2

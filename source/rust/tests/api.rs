@@ -102,6 +102,26 @@ fn open() {
 		Some(ErrKind::TooNew),
 		"v1 on a format 3 file"
 	);
+
+	// A Format line in a raw body is the body's. A real one after it still
+	// counts.
+	let raw = "a: 1\ntmpl:\n\t~~~\n##    Format   9\n\t~~~\n";
+	let in_raw = dir.join("raw.shcl");
+	fs::write(&in_raw, raw).unwrap();
+	let raw_then_real = dir.join("rawreal.shcl");
+	fs::write(&raw_then_real, format!("{raw}##    Format   9\n")).unwrap();
+	let open = |n: u32, p: &PathBuf| {
+		let p = s(p);
+		kind(match n {
+			1 => shclw::v1::open(&p).map(drop),
+			2 => shclw::v2::open(&p).map(drop),
+			_ => shclw::v3::open(&p).map(drop),
+		})
+	};
+	for n in 1..=3 {
+		assert_eq!(open(n, &in_raw), None, "v{n} raw.shcl");
+		assert_eq!(open(n, &raw_then_real), Some(ErrKind::TooNew), "v{n} rawreal.shcl");
+	}
 }
 
 /// An edit made through `inner_mut`, with calls the wrapper doesn't have,

@@ -1,0 +1,25 @@
+get	str	name
+get	int	port
+get	float	ratio
+get	bool	debug
+get	strs	tags
+get	ints	ports
+get	floats	ports
+get	int	name
+get	str	missing
+get	str	empty
+get	str	server.host
+get	raw	tags
+or	int	missing	7
+or	str	name	x
+or	strs	missing	a	b
+or	float	ratio	1.5
+or	bool	debug	false
+or	ints	missing	1	2
+has	server.host
+has	nope
+count	server
+line	port
+names
+errors
+diags

@@ -1,0 +1,9 @@
+errors
+diags
+parse	strict
+errors
+parse	loose
+get	bool	flag
+parse	standard
+get	bool	flag
+get	int	a

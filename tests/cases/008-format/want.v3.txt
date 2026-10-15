@@ -1,0 +1,22 @@
+> format
+3
+> upgrade
+from 3 changed false unsure 0
+| tags: a, b
+| sel: x
+| ##    Format   3
+> upgrade	2
+from 3 changed true unsure 0
+| tags: [a, b]
+| sel: x
+| 
+| ##
+| ## This config file format is SHCL.
+| ## "Simple Hierarchical Config Language"
+| ##    Format   3
+| ##    Home     https://github.com/yottacore/shcl
+| ##    Syntax   https://github.com/yottacore/shcl/blob/v3.0.0-beta1/project/spec.md
+| ##    Legal    SHCL is Copyright © 2026 Jim Collier [ID: 2უNაɘ«҂թȹɤξπ๙¿ձϖ]. License: MIT. No warranty.
+| ##
+> upgrade	9
+error toonew

@@ -1,0 +1,8 @@
+comment	b.c	why c is 2
+remove	b.d
+remove	nope
+syntax	e	plain words
+text
+canonical
+get	str	e
+has	b.d

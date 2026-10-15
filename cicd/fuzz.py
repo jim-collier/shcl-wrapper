@@ -1,0 +1,329 @@
+#!/usr/bin/env python3
+## Purpose: Fuzzes the wrappers against each other. Each case is a document
+##	plus an ops script, made from one seed, run through the Go and Rust
+##	drivers with the same shcl version. The two outputs must match byte for
+##	byte, and a value that was put must read back the same.
+## Copyright © 2026 Jim Collier [ID: 2უNაɘ«҂թȹɤξπ๙¿ձϖ]
+## SPDX-License-Identifier: MIT
+
+from __future__ import annotations
+
+import argparse
+import random
+import shutil
+import subprocess
+import sys
+import time
+from dataclasses import dataclass, field
+from decimal import Decimal
+from pathlib import Path
+
+VERSIONS = (1, 2, 3)
+NAMES = ("a", "b", "port", "name", "Server", "host", "tags", "x-y", "n_1", "list", "on")
+WORDS = ("alpha", "beta", "two words", "café", "x#y", "a, b", "'q'", '"dq"', "C:\\temp", "", " pad ")
+TYPES = ("int", "float", "bool", "str", "strs", "ints", "floats", "raw")
+
+
+@dataclass
+class Case:
+	seed: int
+	version: int
+	doc: str
+	script: str
+	puts: list[tuple[int, str, str, list[str]]] = field(default_factory=list)
+
+
+def gen_scalar(rng: random.Random) -> str:
+	kind = rng.randrange(6)
+	if kind == 0:
+		return str(rng.choice((0, 1, -7, 8080, 2**31, -(2**40), 2**63 - 1)))
+	if kind == 1:
+		return rng.choice(("0.5", "-2.25", "1e3", "3.14159", "1e-7", "100.0"))
+	if kind == 2:
+		return rng.choice(("true", "false", "yes", "no", "on", "off"))
+	if kind == 3:
+		return rng.choice(WORDS)
+	if kind == 4:
+		return ""
+	return rng.choice(NAMES)
+
+
+def gen_array(rng: random.Random, version: int) -> str:
+	items = [rng.choice(("1", "2", "red", "0.5", "x y")) for _ in range(rng.randrange(1, 4))]
+	return ", ".join(items) if version < 3 else "[" + ", ".join(items) + "]"
+
+
+def gen_block(rng: random.Random, version: int, depth: int, out: list[str]) -> None:
+	for _ in range(rng.randrange(1, 5)):
+		name = rng.choice(NAMES)
+		if rng.random() < 0.1:
+			name = f"{name}.{rng.choice(NAMES)}"
+		pad = "\t" * depth
+		roll = rng.random()
+		if roll < 0.08:
+			out.append(f"{pad}# {rng.choice(WORDS)}")
+		elif roll < 0.12:
+			out.append("")
+		elif roll < 0.35 and depth < 3:
+			val = rng.choice(("", " " + rng.choice(NAMES)))
+			out.append(f"{pad}{name}:{val}")
+			gen_block(rng, version, depth + 1, out)
+		elif roll < 0.5:
+			out.append(f"{pad}{name}: {gen_array(rng, version)}")
+		else:
+			out.append(f"{pad}{name}: {gen_scalar(rng)}".rstrip())
+
+
+def gen_doc(rng: random.Random, version: int) -> str:
+	lines: list[str] = []
+	gen_block(rng, version, 0, lines)
+	if version >= 3 and rng.random() < 0.2:
+		lines.append("##    Format   3")
+	return "\n".join(lines) + ("\n" if rng.random() < 0.9 else "")
+
+
+def gen_path(rng: random.Random) -> str:
+	parts = [rng.choice(NAMES) for _ in range(rng.randrange(1, 4))]
+	return ".".join(parts)
+
+
+def esc_field(s: str) -> str:
+	return s.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+
+
+def gen_value(rng: random.Random, typ: str) -> list[str]:
+	if typ == "int":
+		return [str(rng.choice((0, 42, -1, 2**53, -(2**63))))]
+	if typ == "float":
+		return [rng.choice(("0.5", "-1.25", "1e20", "3", "0.001", "123456.789"))]
+	if typ == "bool":
+		return [rng.choice(("true", "false"))]
+	if typ == "str":
+		return [rng.choice(("hello", "two words", "tab\there", "back\\slash", "café →", "x#y", "a, b", "["))]
+	if typ == "strs":
+		return [rng.choice(("a", "b c", "d,e", "")) for _ in range(rng.randrange(0, 4))]
+	if typ == "ints":
+		return [str(rng.randrange(-100, 100)) for _ in range(rng.randrange(0, 4))]
+	return [rng.choice(("0.5", "2", "-3.75")) for _ in range(rng.randrange(0, 4))]
+
+
+def gen_case(seed: int, corpus: list[str]) -> Case:
+	rng = random.Random(seed)
+	version = rng.choice(VERSIONS)
+	if corpus and rng.random() < 0.25:
+		doc = mutate(rng, rng.choice(corpus))
+	else:
+		doc = gen_doc(rng, version)
+	case = Case(seed=seed, version=version, doc=doc, script="")
+	ops: list[str] = []
+	for _ in range(rng.randrange(3, 20)):
+		roll = rng.random()
+		if roll < 0.35:
+			ops.append(f"get\t{rng.choice(TYPES)}\t{gen_path(rng)}")
+		elif roll < 0.5:
+			typ = rng.choice(TYPES[:-1])
+			path = gen_path(rng)
+			vals = gen_value(rng, typ)
+			ops.append("\t".join(["put", typ, path, *map(esc_field, vals)]))
+			case.puts.append((len(ops) - 1, typ, path, vals))
+			ops.append(f"get\t{typ}\t{path}")
+		elif roll < 0.6:
+			ops.append(f"or\t{rng.choice(TYPES)}\t{gen_path(rng)}\t{gen_value(rng, 'int')[0]}")
+		else:
+			ops.append(
+				rng.choice(
+					(
+						f"has\t{gen_path(rng)}",
+						f"count\t{gen_path(rng)}",
+						f"names\t{rng.choice(('', gen_path(rng)))}",
+						f"each\t{gen_path(rng)}",
+						f"eachget\tstr\t{gen_path(rng)}\t{rng.choice(NAMES)}",
+						f"line\t{gen_path(rng)}",
+						f"remove\t{gen_path(rng)}",
+						f"comment\t{gen_path(rng)}\t{rng.choice(WORDS)}",
+						f"syntax\t{gen_path(rng)}\t{rng.choice(WORDS)}",
+						"text",
+						"canonical",
+						"diags",
+						"errors",
+						"format",
+						f"upgrade\t{rng.choice(('', '2', '3'))}",
+						f"parse\t{rng.choice(('loose', 'standard', 'strict'))}",
+						"write\tout.shcl",
+					)
+				)
+			)
+	case.script = "\n".join(ops) + "\n"
+	return case
+
+
+def mutate(rng: random.Random, text: str) -> str:
+	b = bytearray(text.encode())
+	for _ in range(rng.randrange(1, 6)):
+		if not b:
+			break
+		i = rng.randrange(len(b))
+		roll = rng.random()
+		if roll < 0.4:
+			b[i] = rng.choice(b"\t\n :#,[]()\"'\\-.*xX0")
+		elif roll < 0.7:
+			del b[i]
+		elif roll < 0.9:
+			b.insert(i, rng.choice(b"\t\n :#,[]()"))
+		else:
+			b[i] ^= 1 << rng.randrange(8)
+	return bytes(b).decode("utf-8", errors="replace")
+
+
+def format_float(x: float) -> str:
+	if x != x:
+		return "nan"
+	if x in (float("inf"), float("-inf")):
+		return "inf" if x > 0 else "-inf"
+	sign, digits, exponent = Decimal(repr(x)).normalize().as_tuple()
+	ds = "".join(map(str, digits)) or "0"
+	exp = len(ds) - 1 + int(exponent)
+	neg = "-" if sign else ""
+	if exp >= 17 or exp < -5:
+		mant = ds[0] + ("." + ds[1:] if len(ds) > 1 else "")
+		return f"{neg}{mant}e{exp}"
+	if exp < 0:
+		return f"{neg}0.{'0' * (-exp - 1)}{ds}"
+	if len(ds) <= exp + 1:
+		return f"{neg}{ds}{'0' * (exp + 1 - len(ds))}.0"
+	return f"{neg}{ds[: exp + 1]}.{ds[exp + 1 :]}"
+
+
+def esc_out(s: str) -> str:
+	out = []
+	for c in s:
+		if c == "\\":
+			out.append("\\\\")
+		elif c == "\t":
+			out.append("\\t")
+		elif c == "\n":
+			out.append("\\n")
+		elif c == "\r":
+			out.append("\\r")
+		elif ord(c) < 0x20 or ord(c) == 0x7F:
+			out.append(f"\\x{ord(c):02x}")
+		else:
+			out.append(c)
+	return "".join(out)
+
+
+def expected_values(typ: str, vals: list[str]) -> list[str]:
+	if typ in ("float", "floats"):
+		return [format_float(float(v)) for v in vals]
+	if typ in ("str", "strs"):
+		return [esc_out(v) for v in vals]
+	return vals
+
+
+def check_roundtrips(case: Case, output: str) -> list[str]:
+	"""A put that printed ok must read back Good with the same value."""
+	blocks = output.split("\n> ")
+	problems = []
+	for op_index, typ, path, vals in case.puts:
+		if op_index + 1 >= len(blocks):
+			continue
+		put_lines = blocks[op_index].split("\n")
+		get_lines = blocks[op_index + 1].split("\n")
+		if len(put_lines) < 2 or put_lines[1] != "ok" or len(get_lines) < 2:
+			continue
+		fields = get_lines[1].split("\t")
+		if fields[0] == "Empty" and not vals and typ in ("strs", "ints", "floats"):
+			continue
+		want = expected_values(typ, vals)
+		got = fields[3:] if typ in ("strs", "ints", "floats") else fields[2:3]
+		if typ in ("strs", "ints", "floats") and fields[2:3] != [str(len(vals))]:
+			got = ["count " + "".join(fields[2:3])]
+		if fields[0] != "Good" or got != want:
+			problems.append(f"put {typ} {path!r} {vals!r} read back as {get_lines[1]!r}")
+	return problems
+
+
+def run_driver(cmd: list[str], version: int, doc: Path, work: Path, script: str) -> tuple[int, str, str]:
+	if work.exists():
+		shutil.rmtree(work)
+	work.mkdir(parents=True)
+	try:
+		p = subprocess.run(
+			[*cmd, str(version), str(doc), str(work)], input=script.encode(), capture_output=True, timeout=30
+		)
+	except subprocess.TimeoutExpired:
+		return -1, "", "timeout"
+	return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
+
+
+def save_failure(out: Path, case: Case, why: str, go: tuple[int, str, str], rust: tuple[int, str, str]) -> None:
+	d = out / f"seed-{case.seed}"
+	d.mkdir(parents=True, exist_ok=True)
+	(d / "doc.shcl").write_text(case.doc)
+	(d / "ops.txt").write_text(case.script)
+	(d / "why.txt").write_text(f"version {case.version}\n{why}\n")
+	(d / "go.out").write_text(f"exit {go[0]}\n{go[2]}\n---\n{go[1]}")
+	(d / "rust.out").write_text(f"exit {rust[0]}\n{rust[2]}\n---\n{rust[1]}")
+
+
+def load_corpus(cases_dir: Path) -> list[str]:
+	return [p.read_text() for p in sorted(cases_dir.glob("*/doc*.shcl"))]
+
+
+def main() -> int:
+	ap = argparse.ArgumentParser(description=__doc__)
+	ap.add_argument("--go", required=True, help="Go driver binary")
+	ap.add_argument("--rust", required=True, help="Rust driver binary")
+	ap.add_argument("--seconds", type=float, default=30.0, help="wall-clock budget")
+	ap.add_argument("--seed", type=int, default=None, help="first seed; default is from the clock")
+	ap.add_argument("--count", type=int, default=0, help="stop after this many cases; 0 is no limit")
+	ap.add_argument("--cases", type=Path, required=True, help="the shared tests/cases dir, used as a mutation corpus")
+	ap.add_argument("--work", type=Path, required=True, help="scratch dir this run owns")
+	ap.add_argument("--out", type=Path, required=True, help="where failing cases go")
+	args = ap.parse_args()
+
+	first = args.seed if args.seed is not None else int(time.time())
+	corpus = load_corpus(args.cases)
+	deadline = time.monotonic() + args.seconds
+	ran = gets = good_gets = failures = 0
+	seed = first
+	doc_path = args.work / "doc.shcl"
+	args.work.mkdir(parents=True, exist_ok=True)
+	while time.monotonic() < deadline and (args.count == 0 or ran < args.count):
+		case = gen_case(seed, corpus)
+		doc_path.write_text(case.doc)
+		go = run_driver([args.go], case.version, doc_path, args.work / "go", case.script)
+		rust = run_driver([args.rust], case.version, doc_path, args.work / "rust", case.script)
+		problems = []
+		if go[0] != rust[0]:
+			problems.append(f"exit codes differ: go {go[0]}, rust {rust[0]}")
+		if go[0] not in (0, 2) or rust[0] not in (0, 2):
+			problems.append("a driver crashed")
+		if go[1] != rust[1]:
+			problems.append("outputs differ")
+		elif go[0] == 0:
+			problems += check_roundtrips(case, go[1])
+		for line in go[1].split("\n"):
+			if line.startswith(("Good\t", "Empty\t", "NotFound\t", "BadType\t", "Multiple\t", "BadPath\t")):
+				gets += 1
+				good_gets += line.startswith("Good\t")
+		if problems:
+			failures += 1
+			save_failure(args.out, case, "\n".join(problems), go, rust)
+			print(f"FAIL seed {seed} (shcl v{case.version}): {problems[0]}", file=sys.stderr)
+		ran += 1
+		seed += 1
+
+	print(f"fuzz: {ran} cases from seed {first}, {failures} failed, {good_gets} of {gets} reads found a value")
+	if ran == 0:
+		print("fuzz: no cases ran", file=sys.stderr)
+		return 1
+	# A generator that stops making readable documents would pass forever.
+	if gets < 50 or good_gets * 10 < gets:
+		print("fuzz: too few reads found a value; the generator has drifted", file=sys.stderr)
+		return 1
+	return 1 if failures else 0
+
+
+if __name__ == "__main__":
+	sys.exit(main())

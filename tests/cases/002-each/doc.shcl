@@ -1,0 +1,13 @@
+table: users
+	field: id
+		type: int
+	field: name
+		type: string
+table: posts
+	field: id
+		type: int
+Table: tags
+n: 1
+n: 2
+solo: x
+	k: v

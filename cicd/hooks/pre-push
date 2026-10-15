@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+##	Purpose: Runs the cicd gate (format check, lint, tests) before a push, so
+##		nothing reaches dev or main unverified. Turned on per clone with
+##		'git config core.hooksPath cicd/hooks'.
+##	Copyright © 2026 Jim Collier [ID: 2უNაɘ«҂թȹɤξπ๙¿ձϖ]
+##	SPDX-License-Identifier: MIT
+
+set -Eeuo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+
+## GIT_DIR and friends from the hook would point every git call in the gate at
+## this repo's internals.
+for gitVar in $(git rev-parse --local-env-vars); do unset "${gitVar}"; done
+
+exec "${root}/cicd/cicd.bash" --gate --quiet --no-sync

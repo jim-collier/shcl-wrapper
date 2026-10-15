@@ -1,0 +1,5 @@
+check	schema.shcl
+check	schema.shcl	all
+check	schema.shcl	drop
+check	../x
+check	nope.shcl

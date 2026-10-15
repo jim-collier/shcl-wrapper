@@ -26,6 +26,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - A pipeline with shared test cases for both languages, and fuzzing of Go against Rust.
 
+- `First`, `Last`, and `Lines`, to read one instance of a key that's set more than once, and to say where the others are.
+
 ### Changed
 
 - The project is now named shclwrap, and the Go module path is `github.com/jim-collier/shclwrap/source/go`.

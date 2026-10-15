@@ -135,18 +135,33 @@ Go names are listed. Rust uses the same words in snake case, and `ShclDoc` has t
 
 - A float read never gives infinity or NaN. A value like `1e400` is `BadType`, and the fallback read gives the fallback.
 
+- A key set more than once reads as `Multiple`. To take one of them instead, read through `First` or `Last`, which narrow the path to that one instance. Every type and both tiers work on it, and so do Put, Comment, and Remove. `Lines` says where each instance is, for a warning.
+
+	~~~go
+	port := d.Int(d.Last("port"), 8080)
+	if lines := d.Lines("port"); len(lines) > 1 {
+		log.Printf("port is set more than once; lines %v are ignored", lines[:len(lines)-1])
+	}
+	~~~
+
 ### Walking a document
 
-| Call                  | Does
-| :---                  | :---
-| `d.Has(path)`         | Whether the path names anything.
-| `d.Count(path)`       | How many instances it names.
-| `d.Names(path)`       | Child names under it, once each, in file order.
-| `d.Each(path)`        | Every instance, as a `Node` with `Path`, `Value`, and `Line`.
-| `d.Child(base, name)` | `base` with one more name on the end, quoted if it needs it.
-| `d.Line(path)`        | The line a single node is on.
+| Call                            | Does
+| :---                            | :---
+| `d.Has(path)`                   | Whether the path names anything.
+| `d.Count(path)`                 | How many instances it names.
+| `d.Names(path)`                 | Child names under it, once each, in file order.
+| `d.Each(path)`                  | Every instance, as a `Node` with `Path`, `Value`, and `Line`.
+| `d.Child(base, name)`           | `base` with one more name on the end, quoted if it needs it.
+| `d.Line(path)`                  | The line a single node is on.
+| `d.Lines(path)`                 | The line of each instance, in file order.
+| `d.First(path)`, `d.Last(path)` | `path` narrowed to its first or last instance in the file. With fewer than 2 it comes back as it is.
 
-- A `Node.Path` reads that instance and no other, whatever selector syntax the bound shcl uses. A program builds on it with `Child` and never writes a selector itself.
+- A `Node.Path` reads that instance and no other, whatever selector syntax the bound shcl uses. A program builds on it with `Child` and never writes a selector itself. `First` and `Last` give the same kind of path.
+
+- `Each` lists instances in the order shcl keeps them, which isn't always the file's. A block written twice with the same name and value is one block, so `tv.f` in the second part comes after the first part's `tv.f`, even with another `tv` block between them. `Lines`, `First`, and `Last` go by line instead, which is the same on every version.
+	- An instance a put made has no line. `Lines` gives it as 0, and `First` and `Last` count it after the ones from the file.
+	- A canonical save folds those blocks together, so after the save and a reload, the last `tv.f` can be another one. `Rewrites` says whether a save will be canonical.
 
 	~~~go
 	for _, t := range d.Each("table") {
@@ -238,6 +253,8 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 | `get TYPE PATH`                         | status, line, and the value. Arrays print a count, then the items.
 | `or TYPE PATH FALLBACK...`              | the value or the fallback
 | `has`, `count`, `line`, `names`         | the answer for PATH
+| `lines PATH`                            | how many instances, then each one's line
+| `first TYPE PATH`, `last TYPE PATH`     | `get` of the first or last instance
 | `each PATH`                             | index, line, and value, one instance per line
 | `eachget TYPE PATH CHILD`               | `get` of CHILD under each instance
 | `put TYPE PATH VALUE...`                | `ok` or `error KIND`
@@ -273,7 +290,7 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 
 - `cicd/fuzz.py` makes a document and an ops script from each seed, with a generator that knows each format's syntax. A quarter of the documents are mutated copies of the case documents instead.
 
-- Each case runs through the Go and Rust drivers on the same shcl version. The outputs must match byte for byte, neither may crash, and a put that says ok must read back the same. A float read that says `Good` must not give infinity or NaN.
+- Each case runs through the Go and Rust drivers on the same shcl version. The outputs must match byte for byte, neither may crash, and a put that says ok must read back the same. A float read that says `Good` must not give infinity or NaN. A `first` or `last` read must not say `Multiple`, and has to be on the first or last line `lines` gave for that path.
 
 - It runs for a wall-clock budget, and a failing seed is saved with its document, script, and both outputs. If too few reads find a value, the run fails, since a generator that stopped making readable documents would pass forever.
 
@@ -314,6 +331,12 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 - `Rewrites` is a call made before `Write`, rather than a second result from `Write`. It sits beside `Text` and `Canonical`, a program can put it in a plan before anything is written, and `Write` keeps one result in every language.
 
 - On 1.2 and 2.0 `Rewrites` is true only when the loaded text wasn't canonical, rather than always. A canonical file saved in canonical form keeps its lines, which is how 3.0 counts it too.
+
+- The first or last of a repeated key is picked by path, with `First(path)` and `Last(path)`, rather than by a mode on each read or a setting on the document. One pair covers all 8 types in both tiers, and the edits too, the same way `Each` paths do. A setting would change what every read means from somewhere else in the program. A plain read still says `Multiple`, so taking one is always asked for at the call.
+
+- `First` and `Last` go by line, the order the file was written in, since that's what "the last one wins" means to whoever wrote it. `Each` order differs from it for a block written in parts.
+
+- `Lines` is its own call, rather than a field on `Got`, so a program that keeps the `Multiple` default can still name the lines in its warning, and a read costs nothing extra.
 
 - MIT, since programs copy this code into themselves.
 

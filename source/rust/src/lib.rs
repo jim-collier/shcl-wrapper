@@ -340,6 +340,30 @@ pub trait ShclDoc {
 	/// Every instance `path` names, each with a path that reads it alone.
 	fn each(&self, path: &str) -> Vec<Node>;
 	fn line(&self, path: &str) -> usize;
+	/// The line of each instance of `path`, in file order. An instance a
+	/// put made has none, and is a 0 at the end.
+	fn lines(&self, path: &str) -> Vec<usize> {
+		in_file_order(self.each(path)).iter().map(|n| n.line).collect()
+	}
+	/// `path` narrowed to its first instance in the file, so a read or an
+	/// edit takes that one where it would say `Multiple`. A path with fewer
+	/// than 2 instances comes back as it is.
+	fn first(&self, path: &str) -> String {
+		let nodes = in_file_order(self.each(path));
+		match nodes.first() {
+			Some(n) if nodes.len() > 1 => n.path.clone(),
+			_ => path.to_owned(),
+		}
+	}
+	/// `first` for the last instance in the file, the one that wins where a
+	/// later line overrides an earlier one.
+	fn last(&self, path: &str) -> String {
+		let nodes = in_file_order(self.each(path));
+		match nodes.last() {
+			Some(n) if nodes.len() > 1 => n.path.clone(),
+			_ => path.to_owned(),
+		}
+	}
 	/// `base` with one more name on the end, quoted if it needs it.
 	fn child(&self, base: &str, name: &str) -> String;
 
@@ -471,6 +495,14 @@ pub fn verify_syntax<D: ShclDoc>(d: &D, path: &str, alone: &D, line: &D) -> Resu
 			.msg("reads back as a different value"));
 	}
 	Ok(())
+}
+
+/// Sorts instances by line. `each` goes in tree order, which for a reopened
+/// block isn't the order of the file. An instance a put made has no line,
+/// and goes after the rest in `each` order.
+fn in_file_order(mut nodes: Vec<Node>) -> Vec<Node> {
+	nodes.sort_by_key(|n| if n.line == 0 { usize::MAX } else { n.line });
+	nodes
 }
 
 /// Keeps the first of each name, compared without ASCII case, since shcl
@@ -721,6 +753,19 @@ impl<L: Lib> Runner<'_, L> {
 			"has" => self.say(&self.doc.has(arg(1)).to_string()),
 			"count" => self.say(&self.doc.count(arg(1)).to_string()),
 			"line" => self.say(&self.doc.line(arg(1)).to_string()),
+			"lines" => {
+				let lines = self.doc.lines(arg(1));
+				let items = lines.iter().map(ToString::to_string).collect::<Vec<_>>().join("\t");
+				self.say(&counted(lines.len(), &items));
+			}
+			"first" => {
+				let s = self.get(arg(1), &self.doc.first(arg(2)));
+				self.say(&s);
+			}
+			"last" => {
+				let s = self.get(arg(1), &self.doc.last(arg(2)));
+				self.say(&s);
+			}
 			"names" => self.say(&join_esc(&self.doc.names(arg(1)))),
 			"each" => {
 				for (i, n) in self.doc.each(arg(1)).iter().enumerate() {

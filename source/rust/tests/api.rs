@@ -189,3 +189,32 @@ fn rewrites_new() {
 	check_rewrites_new::<shclw::v2::Version>(2, shclw::v2::new());
 	check_rewrites_new::<shclw::v3::Version>(3, shclw::v3::new());
 }
+
+/// `first` and `last` pick by line, so the fallback reads and an edit take
+/// that instance alone. An instance a put made has no line and sorts last.
+fn check_first_last<L: Lib>(n: u32) {
+	let mut d = L::parse("p: 1\ntv: a\n\tf: 1\ntv: b\n\tf: 2\ntv: a\n\tf: 3\np: 2\n");
+	assert_eq!(d.int(&d.last("p"), 9), 2, "v{n}: int of last p");
+	assert_eq!(d.str(&d.first("tv.f"), ""), "1", "v{n}: str of first tv.f");
+	assert_eq!(d.int(&d.last("tv.f"), 9), 3, "v{n}: int of last tv.f");
+	assert_eq!(d.int("p", 9), 9, "v{n}: plain int of p");
+	let last = d.last("p");
+	d.put(&last, 5).unwrap_or_else(|e| panic!("v{n}: put on last p: {e}"));
+	assert_eq!(d.get_int(&d.first("p")).value, 1, "v{n}: first p after the put");
+	assert_eq!(d.int(&d.last("p"), 9), 5, "v{n}: last p after the put");
+	assert_eq!(d.lines("p"), [1, 8], "v{n}: lines of p after the put");
+	let tv = d.each("tv");
+	let (a, b) = (d.child(&tv[0].path, "g"), d.child(&tv[1].path, "g"));
+	d.put(&b, 2).unwrap_or_else(|e| panic!("v{n}: {e}"));
+	d.put(&a, 1).unwrap_or_else(|e| panic!("v{n}: {e}"));
+	assert_eq!(d.int(&d.last("tv.g"), 9), 2, "v{n}: last of two put instances");
+	assert_eq!(d.lines("tv.g"), [0, 0], "v{n}: lines of two put instances");
+	assert_eq!(d.last("nope"), "nope", "v{n}: last of a missing path");
+}
+
+#[test]
+fn first_last() {
+	check_first_last::<shclw::v1::Version>(1);
+	check_first_last::<shclw::v2::Version>(2);
+	check_first_last::<shclw::v3::Version>(3);
+}

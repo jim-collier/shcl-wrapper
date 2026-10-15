@@ -1,0 +1,43 @@
+# A plain read of a repeated key still says Multiple.
+get	int	port
+or	int	port	1
+lines	port
+first	int	port
+last	int	port
+first	str	port
+last	float	port
+# One instance, none, and a path that doesn't parse.
+lines	host
+first	str	host
+last	str	host
+lines	nope
+first	int	nope
+last	int	nope
+lines	a..b
+last	int	a..b
+# The same name and value merge into one.
+lines	same
+last	str	same
+# A reopened block: each is in tree order, lines in file order.
+each	tv.f
+lines	tv.f
+first	int	tv.f
+last	int	tv.f
+# A value, then a block.
+lines	mix
+first	int	mix
+last	int	mix
+last	str	mix
+# Arrays, bools, and raw.
+first	ints	arr
+last	ints	arr
+last	floats	arr
+first	strs	arr
+first	bool	flag
+last	bool	flag
+first	raw	r
+last	raw	r
+# What a remove leaves.
+remove	tv.f
+lines	tv.f
+last	int	tv.f

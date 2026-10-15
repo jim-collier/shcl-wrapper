@@ -17,6 +17,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from decimal import Decimal
+from itertools import pairwise
 from pathlib import Path
 
 VERSIONS = (1, 2, 3)
@@ -121,14 +122,19 @@ def gen_case(seed: int, corpus: list[str]) -> Case:
 		roll = rng.random()
 		if roll < 0.35:
 			ops.append(f"get\t{rng.choice(TYPES)}\t{gen_path(rng)}")
-		elif roll < 0.5:
+		elif roll < 0.47:
 			typ = rng.choice(TYPES[:-1])
 			path = gen_path(rng)
 			vals = gen_value(rng, typ)
 			ops.append("\t".join(["put", typ, path, *map(esc_field, vals)]))
 			case.puts.append((len(ops) - 1, typ, path, vals))
 			ops.append(f"get\t{typ}\t{path}")
-		elif roll < 0.6:
+		elif roll < 0.55:
+			# A one-name path finds a repeated key far more often.
+			path = rng.choice((gen_path(rng), rng.choice(NAMES)))
+			ops.append(f"lines\t{path}")
+			ops.append(f"{rng.choice(('first', 'last'))}\t{rng.choice(TYPES)}\t{path}")
+		elif roll < 0.62:
 			fallback = rng.choice((gen_value(rng, "int")[0], "0.5", "1e400", "nan"))
 			ops.append(f"or\t{rng.choice(TYPES)}\t{gen_path(rng)}\t{fallback}")
 		else:
@@ -141,6 +147,7 @@ def gen_case(seed: int, corpus: list[str]) -> Case:
 						f"each\t{gen_path(rng)}",
 						f"eachget\tstr\t{gen_path(rng)}\t{rng.choice(NAMES)}",
 						f"line\t{gen_path(rng)}",
+						f"lines\t{gen_path(rng)}",
 						f"remove\t{gen_path(rng)}",
 						f"comment\t{gen_path(rng)}\t{rng.choice(WORDS)}",
 						f"syntax\t{gen_path(rng)}\t{rng.choice(WORDS)}",
@@ -246,15 +253,40 @@ def check_roundtrips(case: Case, output: str) -> list[str]:
 	return problems
 
 
+FLOAT_READS = ("get\tfloat", "first\tfloat", "last\tfloat")
+
+
 def check_finite(output: str) -> list[str]:
 	"""A float read that says Good never gives infinity or NaN."""
 	problems = []
 	for block in output.split("\n> "):
 		lines = block.removeprefix("> ").split("\n")
-		if len(lines) < 2 or not lines[0].startswith("get\tfloat") or not lines[1].startswith("Good\t"):
+		if len(lines) < 2 or not lines[0].startswith(FLOAT_READS) or not lines[1].startswith("Good\t"):
 			continue
 		if {"inf", "-inf", "nan"} & set(lines[1].split("\t")[2:]):
 			problems.append(f"{lines[0]!r} read as {lines[1]!r}")
+	return problems
+
+
+def check_picks(output: str) -> list[str]:
+	"""A first or last read right after lines of the same path takes one
+	instance, on the first or last of those lines."""
+	problems = []
+	blocks = [b.removeprefix("> ").split("\n") for b in output.split("\n> ")]
+	for prev, cur in pairwise(blocks):
+		if len(prev) < 2 or len(cur) < 2 or not prev[0].startswith("lines\t"):
+			continue
+		op = cur[0].split("\t")
+		if op[0] not in ("first", "last") or op[2:3] != prev[0].split("\t")[1:2]:
+			continue
+		lines = prev[1].split("\t")[1:]
+		status, line = (cur[1].split("\t") + [""])[:2]
+		if status == "Multiple":
+			problems.append(f"{cur[0]!r} read as {cur[1]!r}")
+		elif not lines and status not in ("NotFound", "BadPath"):
+			problems.append(f"{cur[0]!r} read as {cur[1]!r}, with no instances")
+		elif lines and line != (lines[0] if op[0] == "first" else lines[-1]):
+			problems.append(f"{cur[0]!r} read as {cur[1]!r}, with lines {prev[1]!r}")
 	return problems
 
 
@@ -321,6 +353,7 @@ def main() -> int:
 			elif go[0] == 0:
 				problems += check_roundtrips(case, go[1])
 				problems += check_finite(go[1])
+				problems += check_picks(go[1])
 			for line in go[1].split("\n"):
 				if line.startswith(("Good\t", "Empty\t", "NotFound\t", "BadType\t", "Multiple\t", "BadPath\t")):
 					gets += 1

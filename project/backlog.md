@@ -25,19 +25,6 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 
 ## Issues
 
-- Make the repo public, or document private access
-	- ID: 2026101512024148
-	- Type: Task
-	- Status: Waiting for answers
-	- Priority: Avg
-	- Opened: 2026-10-15
-	- Opened by: JC
-	- Requirements:
-		- While the repo is private, `go get` needs `GOPRIVATE=github.com/jim-collier/*`, and a cargo git dependency needs `net.git-fetch-with-cli = true`.
-		- Public would need neither.
-	- Decisions:
-		- Private at first (JC, 2026-10-15).
-
 - Go and Rust wrappers over shcl 1.2, 2.0, and 3.0
 	- ID: 2026101512024150
 	- Type: Feature
@@ -196,6 +183,22 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Opened by: JC
 	- Requirements:
 		- The shared cases on Windows and macOS, mostly for the atomic write.
+
+- Make the repo public
+	- ID: 2026101512024148
+	- Type: Task
+	- Status: Done
+	- Priority: Avg
+	- Opened: 2026-10-15
+	- Opened by: JC
+	- Requirements:
+		- While the repo is private, `go get` needs `GOPRIVATE=github.com/jim-collier/*`, and a cargo git dependency needs `net.git-fetch-with-cli = true`.
+		- Public would need neither.
+	- Decisions:
+		- Private at first, then public the same day (JC, 2026-10-15).
+	- Progress log:
+		- 20261015: public, with secret scanning on. A plain `go get` works with no settings.
+	- Closed: 2026-10-15
 
 ## Template
 

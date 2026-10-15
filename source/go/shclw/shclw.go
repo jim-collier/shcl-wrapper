@@ -205,6 +205,7 @@ type Doc interface {
 	Text() string
 	Canonical() string
 	Write(path string) error
+	Rewrites() bool
 	Diags() []Diag
 	Errors() int
 	Check(schema Doc) []Diag

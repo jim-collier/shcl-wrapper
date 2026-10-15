@@ -169,3 +169,23 @@ fn upgrade_refuses_old_errors() {
 	let u = shclw::v3::upgrade("tags: a, b\n", 2).expect("clean 2.x file");
 	assert!(u.changed, "clean 2.x file: {u:?}");
 }
+
+/// A new document has no lines of its own to keep, so it never rewrites. A
+/// load at any strictness counts the same as `parse`.
+fn check_rewrites_new<L: Lib>(n: u32, mut fresh: L::Doc) {
+	fresh.put("a.b", 1_i64).expect("put");
+	assert!(!fresh.rewrites(), "v{n}: new document says it rewrites");
+	let (loose, _) = L::parse_keep("a:   1\n", shclw::Strictness::Loose);
+	assert_eq!(
+		loose.rewrites(),
+		n < 3,
+		"v{n}: loose load of a text that isn't canonical"
+	);
+}
+
+#[test]
+fn rewrites_new() {
+	check_rewrites_new::<shclw::v1::Version>(1, shclw::v1::new());
+	check_rewrites_new::<shclw::v2::Version>(2, shclw::v2::new());
+	check_rewrites_new::<shclw::v3::Version>(3, shclw::v3::new());
+}

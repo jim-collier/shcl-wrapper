@@ -1,0 +1,8 @@
+rewrites
+put	int	a	5
+rewrites
+text
+put	int	b.d	3
+rewrites
+text
+write	out.shcl

@@ -71,6 +71,8 @@ func (r *runner) op(f []string) {
 		r.block(d.Text())
 	case "canonical":
 		r.block(d.Canonical())
+	case "rewrites":
+		r.out(strconv.FormatBool(d.Rewrites()))
 	case "diags":
 		r.diags(d.Diags())
 	case "errors":

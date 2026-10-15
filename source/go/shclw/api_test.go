@@ -128,3 +128,21 @@ func TestUpgradeRefusesOldErrors(t *testing.T) {
 		t.Errorf("clean 2.x file: got %+v, %v, want changed", u, err)
 	}
 }
+
+// A new document has no lines of its own to keep, so it never rewrites. A
+// load at any strictness counts the same as Parse.
+func TestRewritesNew(t *testing.T) {
+	for _, v := range libs {
+		d := v.lib.New()
+		if err := d.Put("a.b", 1); err != nil {
+			t.Fatalf("v%d: %v", v.n, err)
+		}
+		if d.Rewrites() {
+			t.Errorf("v%d: new document says it rewrites", v.n)
+		}
+		loose, _ := v.lib.ParseWith("a:   1\n", shclw.Loose)
+		if got, want := loose.Rewrites(), v.n < 3; got != want {
+			t.Errorf("v%d: loose load of a text that isn't canonical: got %v, want %v", v.n, got, want)
+		}
+	}
+}

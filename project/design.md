@@ -112,9 +112,16 @@ Go names are listed. Rust uses the same words in snake case, and `ShclDoc` has t
 | `d.Text()`                | The document as it would be saved.
 | `d.Canonical()`           | The document in canonical form.
 | `d.Write(path)`           | Saves `Text()` atomically.
+| `d.Rewrites()`            | Whether `Write` puts the canonical form in place of the lines the document was loaded from.
 | `d.Diags()`, `d.Errors()` | The load's diagnostics, and how many are errors.
 | `d.Check(schema)`         | Validates against a schema document.
 | `schema.DropDeclared(ds)` | Drops the repeat hints for keys the schema says repeat.
+
+- `Rewrites` is for a program that tells the user what a save will do. When it's true, lines no edit touched can change, and comments can move.
+	- 3.0 keeps a file's own lines, and falls back to the canonical form when it can't keep them with the edits in. A child added under a flat dotted line like `b.c: 2` is one such edit.
+	- 1.2 and 2.0 only save canonical form, so it's true for any loaded text that wasn't canonical already.
+	- A `New` document has no lines to keep, and says false.
+	- On 3.0 it builds the save's text to find out, so it costs about what `Text` does.
 
 ### Reads
 
@@ -211,6 +218,7 @@ Each row has a test, either a shared case or an API test.
 | A file that isn't UTF-8                  | Varies by language.                                                | `ErrIO`, everywhere.
 | Walking repeated entries                 | Selector syntax differs by version.                                | `Each` gives paths, and `Child` extends them.
 | Saving in 1.2                            | No save call.                                                      | `Write` saves atomically.
+| A save that can't keep the file's lines  | 1.2 and 2.0 save canonical only. 3.0's save returns a flag.        | `Rewrites` asks before the save, everywhere.
 | Rust 1.2 fallback reads                  | No `get_*_or`.                                                     | `int(path, fallback)` and the rest, as in every other version.
 
 - `PutSyntax` checks its text by setting it in a new document and parsing `k: text` in another. The two have to come out the same, and the value at the path has to read the same as the parsed one.
@@ -225,6 +233,7 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 | :---                                    | :---
 | `parse [loose\|standard\|strict]`       | `ok` or `error strict`, and the document is reloaded
 | `text`, `canonical`                     | the document, one `\|`-prefixed line per line
+| `rewrites`                              | `true` or `false`, from `Rewrites`
 | `diags`, `errors`                       | each diagnostic as line, severity, code, and message, or the count
 | `get TYPE PATH`                         | status, line, and the value. Arrays print a count, then the items.
 | `or TYPE PATH FALLBACK...`              | the value or the fallback
@@ -301,6 +310,10 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 - `UpgradeFile` on 3.0 does its own read, backup, and write with shcl's parts, rather than call shcl's `UpgradeFile`. shcl's reads the file again after the wrapper's 2.0 check, so an edit in between was converted with no check.
 
 - A file that changed under `UpgradeFile` is `ErrIO`, as shcl reports it, rather than a kind of its own.
+
+- `Rewrites` is a call made before `Write`, rather than a second result from `Write`. It sits beside `Text` and `Canonical`, a program can put it in a plan before anything is written, and `Write` keeps one result in every language.
+
+- On 1.2 and 2.0 `Rewrites` is true only when the loaded text wasn't canonical, rather than always. A canonical file saved in canonical form keeps its lines, which is how 3.0 counts it too.
 
 - MIT, since programs copy this code into themselves.
 

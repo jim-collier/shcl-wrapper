@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jim-collier/shcl-wrapper/source/go/shclw"
+	"github.com/jim-collier/shclwrap/source/go/shclw"
 )
 
 // FuzzRun feeds any document and any script to every version. Nothing may

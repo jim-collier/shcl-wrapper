@@ -14,7 +14,7 @@
 </div>
 
 <!-- TOC ignore:true -->
-# shcl-wrapper
+# shclwrap
 
 One small, steady API over every version of [shcl](https://github.com/yottacore/shcl), in each language that uses it.
 
@@ -63,11 +63,11 @@ If your program uses one shcl version and doesn't plan to move, you don't need t
 ### Go
 
 ~~~bash
-go get github.com/jim-collier/shcl-wrapper/source/go@dev
+go get github.com/jim-collier/shclwrap/source/go@dev
 ~~~
 
 ~~~go
-import shclw "github.com/jim-collier/shcl-wrapper/source/go/shclw3"
+import shclw "github.com/jim-collier/shclwrap/source/go/shclw3"
 
 doc, err := shclw.Open("app.shcl")
 if err != nil && shclw.KindOf(err) != shclw.ErrNotFound {
@@ -89,7 +89,7 @@ return doc.Write("app.shcl")
 
 ~~~toml
 [dependencies]
-shclw = { git = "https://github.com/jim-collier/shcl-wrapper", branch = "dev", features = ["shcl3"] }
+shclw = { git = "https://github.com/jim-collier/shclwrap", branch = "dev", features = ["shcl3"] }
 ~~~
 
 ~~~rust
@@ -127,4 +127,4 @@ If it saves you some time, you can say thanks through [GitHub Sponsors](https://
 > Licensed under the [MIT License](https://mit-license.org/)<br />
 > SPDX-License-Identifier: `MIT`<br />
 > No warranty.<br />
-> shcl-wrapper™ is a [trademark](trademark.md) of Jim Collier.
+> shclwrap™ is a [trademark](trademark.md) of Jim Collier.

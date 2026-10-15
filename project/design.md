@@ -253,7 +253,7 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 
 ## Sharing the code
 
-- Go: `go get github.com/jim-collier/shcl-wrapper/source/go@<commit>`, then import the one version package. Copying `shclw` and the version package into a project works too.
+- Go: `go get github.com/jim-collier/shclwrap/source/go@<commit>`, then import the one version package. Copying `shclw` and the version package into a project works too.
 
 - Rust: a git dependency on this repo with one feature on, or a copy of `source/rust/src`.
 

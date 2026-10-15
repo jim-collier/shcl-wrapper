@@ -73,20 +73,6 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- shcl's Go module path is still `.../v2`, and Go won't take a v3 tag on it. Go stays on a commit until that changes.
 		- Quillroute plans to have its release refuse a commit pin. The same check would fit here.
 
-- Rename the project shclwrap
-	- ID: 2026101513524769
-	- Type: Task
-	- Status: Queued
-	- Priority: Critical
-	- Opened: 20261015-135247
-	- Opened by: JC
-	- Requirements:
-		- The project, the GitHub repo, and the Go module path are named shclwrap.
-	- Decisions:
-		- The Go packages, the Rust crate, the drivers, and the `SHCLW_` variables stay `shclw`.
-		- The contact address moves to the new name.
-		- The local project folders get renamed by hand, outside the repo.
-
 - Upgrade passes along a conversion that stopped partway
 	- ID: 2026101513330001
 	- Type: Bug
@@ -722,6 +708,29 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Opened by: JC
 	- Parent ID: 2026101512024161
 	- Note: Lenscart bundles shcl's wheel in its packages. Folderkite parses shcl by hand in its Python tools, since nothing is installed there.
+
+- Rename the project shclwrap
+	- ID: 2026101513524769
+	- Type: Task
+	- Status: Done
+	- Priority: Critical
+	- Opened: 20261015-135247
+	- Opened by: JC
+	- Requirements:
+		- The project, the GitHub repo, and the Go module path are named shclwrap.
+	- Decisions:
+		- The Go packages, the Rust crate, the drivers, and the `SHCLW_` variables stay `shclw`.
+		- The contact address moves to the new name.
+		- The local project folders get renamed by hand, outside the repo.
+	- Progress log:
+		- 20261015: the name is shclwrap in the docs, the cicd output, and the contact address. The Go module path is `github.com/jim-collier/shclwrap/source/go`, with every import moved.
+		- 20261015: the GitHub repo is now jim-collier/shclwrap. GitHub sends the old URL there.
+	- Branch: shclwrap
+	- Commit: 3f6eb38
+	- Test case: none of its own, since it's a rename. The cicd gate passes on the renamed module.
+	- Swept: `git grep -iE 'shcl[-_]wrapper'` finds nothing.
+	- Closed: 20261015-135423
+	- Acceptance signoff: Self-closed: mechanical rename.
 
 - Make the repo public
 	- ID: 2026101512024148

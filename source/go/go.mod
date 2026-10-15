@@ -1,4 +1,4 @@
-module github.com/jim-collier/shcl-wrapper/source/go
+module github.com/jim-collier/shclwrap/source/go
 
 go 1.21
 

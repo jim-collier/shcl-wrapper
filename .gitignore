@@ -1,0 +1,5 @@
+/source/rust/target/
+/cicd/artifacts/
+/cicd/work/
+__pycache__/
+*.pyc

@@ -1,0 +1,7 @@
+## settings
+name:   My App   # trailing note
+port: 8080
+
+server.host: a.example.com
+url: "http://h/#frag"
+word: café

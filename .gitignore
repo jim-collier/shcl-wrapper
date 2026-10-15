@@ -3,3 +3,5 @@
 /cicd/work/
 __pycache__/
 *.pyc
+/source/c/build/
+/cicd/cache/

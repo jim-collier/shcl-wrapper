@@ -1,0 +1,11 @@
+text
+canonical
+write	out.shcl
+write	sub/out.shcl
+write	..
+get	str	url
+get	str	word
+errors
+diags
+parse	loose
+text

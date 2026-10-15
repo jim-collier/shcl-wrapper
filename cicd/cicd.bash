@@ -7,7 +7,7 @@
 ##	- Stages (fail-fast, any error aborts before the next stage):
 ##	   0. remote sync (fast-forward from upstream before anything is built)
 ##	   1. format (in place; check-only under --gate)
-##	   2. lint (go vet, staticcheck, clippy, shellcheck, ruff)
+##	   2. lint (go vet, staticcheck, clippy, clang-tidy, gcc-15, shellcheck, ruff)
 ##	   3. tests (shared cases against every shcl version, in every language)
 ##	   4. fuzz (Go against Rust from generated cases, plus Go's own fuzzer)
 ##	- Syntax:
@@ -24,6 +24,8 @@
 ##	  for Go against Rust, and SHCLW_GOFUZZ_SECONDS (default 30, 0 with --quick)
 ##	  for Go's fuzzer. Failing fuzz cases go to cicd/artifacts/fuzz/.
 ##	- Test scratch goes under $TMPDIR, in a folder the run makes and removes.
+##	- C builds against the shcl.h pinned in source/c/shcl-pins.env, fetched by
+##	  commit into cicd/cache/ and checked by sha256.
 
 ##	History: At bottom of script.
 
@@ -38,6 +40,7 @@ set -Eeuo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "${here}/.." && pwd)"
 source "${here}/tool-pins.env"
+source "${root}/source/c/shcl-pins.env"
 source "${here}/utility/include/gfs-rotate.bash"
 stamp="$(date +%Y%m%d-%H%M%S)"
 
@@ -78,6 +81,27 @@ trap 'rc=$?; printf "\n[ CICD ABORTED (exit %s) at line %s: %s ]\n\n" "$rc" "$LI
 ## Warns when a tool on this box isn't the pinned version.
 fCheckPin(){   ## fCheckPin NAME PINNED ACTUAL
 	if [[ "$3" != *"$2"* ]]; then fEcho "WARNING: $1 is '${3}', pinned ${2} in cicd/tool-pins.env"; fi
+	return 0
+}
+
+## The pinned shcl.h for a C build, fetched by commit into the gitignored cache
+## and checked by sha256, the way Go and Rust get theirs from their package
+## managers. Sets shclDir to the folder holding it.
+shclDir=""
+fShclHeader(){   ## fShclHeader REV SHA256
+	local rev="$1" sum="$2"
+	local dir="${root}/cicd/cache/shcl-c/${rev}"
+	local got=""
+	if [[ -f "${dir}/shcl.h" ]]; then got="$(sha256sum "${dir}/shcl.h" | cut -d' ' -f1)"; fi
+	if [[ "${got}" != "${sum}" ]]; then
+		mkdir -p "${dir}"
+		curl -fsSL --retry 2 -o "${dir}/shcl.h.part" "https://raw.githubusercontent.com/yottacore/shcl/${rev}/source/c/shcl.h" \
+			|| fDie "couldn't fetch shcl.h at ${rev}"
+		got="$(sha256sum "${dir}/shcl.h.part" | cut -d' ' -f1)"
+		[[ "${got}" == "${sum}" ]] || fDie "shcl.h at ${rev} has sha256 ${got}, and ${sum} is pinned"
+		mv -f "${dir}/shcl.h.part" "${dir}/shcl.h"
+	fi
+	shclDir="${dir}"
 	return 0
 }
 
@@ -147,11 +171,13 @@ if ((doGate)); then
 	unformatted="$(cd "${root}/source/go" && gofmt -l .)"
 	[[ -z "${unformatted}" ]] || fDie "gofmt would change: ${unformatted}"
 	(cd "${root}/source/rust" && cargo fmt --check) || fDie "cargo fmt would change files"
+	make -s -C "${root}/source/c" format-check || fDie "clang-format would change files"
 	fEcho "OK: formatted"
 else
 	(cd "${root}/source/go" && gofmt -w .)
 	(cd "${root}/source/rust" && cargo fmt)
-	fEcho "OK: gofmt and cargo fmt applied"
+	make -s -C "${root}/source/c" format
+	fEcho "OK: gofmt, cargo fmt, and clang-format applied"
 fi
 
 #•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
@@ -160,10 +186,17 @@ fCheckPin go           "${PIN_GO}"          "$(go version)"
 fCheckPin staticcheck  "${PIN_STATICCHECK}" "$(staticcheck --version 2>/dev/null || echo missing)"
 fCheckPin shellcheck   "${PIN_SHELLCHECK}"  "$(shellcheck --version 2>/dev/null | sed -n 2p || echo missing)"
 fCheckPin ruff         "${PIN_RUFF}"        "$(ruff --version 2>/dev/null || echo missing)"
+fCheckPin gcc          "${PIN_GCC}"         "$(gcc --version 2>/dev/null | sed -n 1p || echo missing)"
+fCheckPin gcc-15       "${PIN_GCC15}"       "$(gcc-15 --version 2>/dev/null | sed -n 1p || echo missing)"
+fCheckPin clang-format "${PIN_CLANG_FORMAT}" "$(clang-format --version 2>/dev/null || echo missing)"
+fCheckPin clang-tidy   "${PIN_CLANG_TIDY}"  "$(clang-tidy --version 2>/dev/null | sed -n 2p || echo missing)"
 (cd "${root}/source/go" && go vet ./... && staticcheck ./...)
 fEcho "OK: go vet, staticcheck"
 (cd "${root}/source/rust" && cargo clippy --quiet -j "${cpuCap}" --all-features --all-targets -- -D warnings -W clippy::pedantic)
 fEcho "OK: clippy"
+fShclHeader "${SHCL3_REV}" "${SHCL3_SHA256}"; shcl3Dir="${shclDir}"
+make -s -C "${root}/source/c" SHCL_DIR="${shcl3Dir}" lint strict
+fEcho "OK: clang-tidy, and gcc-15 at C17 (C over shcl 3.0)"
 mapfile -t shellFiles < <(find "${root}/cicd" -type f \( -name '*.bash' -o -path '*/hooks/*' \) | sort)
 ((${#shellFiles[@]})) || fDie "shellcheck found no files"
 shellcheck "${shellFiles[@]}"
@@ -178,6 +211,11 @@ fSection "3/4  Tests"
 fEcho "OK: Go tests"
 (cd "${root}/source/rust" && TMPDIR="${work}" cargo test --quiet -j "${cpuCap}" --all-features)
 fEcho "OK: Rust tests"
+TMPDIR="${work}" make -s -C "${root}/source/c" -j "${cpuCap}" SHCL_DIR="${shcl3Dir}" OUT="${work}/c3" test drive
+fEcho "OK: C API tests over shcl 3.0, sanitized, plain, and as C++"
+## C has only some ops so far. c_cases.py lists, per case, the ops it skipped.
+TMPDIR="${work}" python3 "${here}/c_cases.py" --drive "${work}/c3/shclw-drive" --version 3 --cases "${root}/tests/cases"
+fEcho "OK: C shared cases over shcl 3.0"
 
 #•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
 if ((doFuzz)); then
@@ -205,3 +243,4 @@ fEcho_Clean
 
 ##	History:
 ##		- 2026-10-15 JC: Created. Format, lint, shared cases, and Go-against-Rust fuzz for the Go and Rust wrappers.
+##		- 2026-10-15 JC: C over shcl 3.0: clang-format, clang-tidy, gcc-15, sanitized API tests, a C++ build, and the shared cases.

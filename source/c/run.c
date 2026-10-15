@@ -1,0 +1,779 @@
+// Copyright © 2026 Jim Collier [ID: 2უNაɘ«҂թȹɤξπ๙¿ձϖ]
+// SPDX-License-Identifier: MIT
+
+// shclw_run: the the ops script runner, a port of Go's shclw.Run. Its output has
+// to match Go's byte for byte.
+
+#include "shclw_adapter.h"
+
+#include <errno.h>
+#include <inttypes.h>
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct {
+	char *p;
+	size_t n, cap;
+	bool oom;
+} buf;
+
+static void put(buf *b, const char *p, size_t n) {
+	if (b->oom) {
+		return;
+	}
+	if (n >= b->cap - b->n) {
+		size_t cap = b->cap ? b->cap : 256;
+		while (n >= cap - b->n) {
+			if (cap > SIZE_MAX / 2) {
+				b->oom = true;
+				return;
+			}
+			cap *= 2;
+		}
+		char *grown = (char *)realloc(b->p, cap);
+		if (!grown) {
+			b->oom = true;
+			return;
+		}
+		b->p = grown;
+		b->cap = cap;
+	}
+	if (n) {
+		memcpy(b->p + b->n, p, n);
+	}
+	b->n += n;
+	b->p[b->n] = '\0';
+}
+
+static void puts_(buf *b, const char *z) { put(b, z, strlen(z)); }
+static void putc_(buf *b, char c) { put(b, &c, 1); }
+static void nl(buf *b) { putc_(b, '\n'); }
+
+static void put_i64(buf *b, int64_t v) {
+	char s[24];
+	(void)snprintf(s, sizeof s, "%" PRId64, v);
+	puts_(b, s);
+}
+
+static void put_size(buf *b, size_t v) {
+	char s[24];
+	(void)snprintf(s, sizeof s, "%zu", v);
+	puts_(b, s);
+}
+
+// esc makes a value safe for one tab-separated output field. Bytes that
+// aren't valid UTF-8 print as \xHH.
+static void esc(buf *b, const char *s, size_t n) {
+	char hex[8];
+	for (size_t i = 0; i < n;) {
+		uint32_t c = 0;
+		size_t size = shclw_i_utf8_next(s + i, n - i, &c);
+		if (!size) {
+			(void)snprintf(hex, sizeof hex, "\\x%02x", (unsigned)(unsigned char)s[i]);
+			puts_(b, hex);
+			i++;
+			continue;
+		}
+		switch (c) {
+		case '\\': puts_(b, "\\\\"); break;
+		case '\t': puts_(b, "\\t"); break;
+		case '\n': puts_(b, "\\n"); break;
+		case '\r': puts_(b, "\\r"); break;
+		default:
+			if (c < 0x20 || c == 0x7f) {
+				(void)snprintf(hex, sizeof hex, "\\x%02x", (unsigned)c);
+				puts_(b, hex);
+			} else {
+				put(b, s + i, size);
+			}
+		}
+		i += size;
+	}
+}
+
+// Go's strconv.FormatFloat(f, 'e', -1, 64) gives the shortest digits that
+// read back, and the closest of those. snprintf gives the closest at a given
+// length, which can miss by one in the last digit next to a power of 2, so
+// the digit above it is tried too.
+static bool shortest(double f, int prec, char *digits, int *exp) {
+	char s[80];
+	(void)snprintf(s, sizeof s, "%.*e", prec, f);
+	char *e = strchr(s, 'e');
+	*exp = (int)strtol(e + 1, NULL, 10);
+	size_t n = 0;
+	for (char *p = s; p < e; p++) {
+		if (*p >= '0' && *p <= '9') {
+			digits[n++] = *p;
+		}
+	}
+	digits[n] = '\0';
+	for (int pass = 0; pass < 2; pass++) {
+		(void)snprintf(s, sizeof s, "%s%c.%se%d", f < 0 ? "-" : "", digits[0], digits + 1, *exp);
+		if (strtod(s, NULL) == f) {
+			return true;
+		}
+		size_t i = n;
+		while (i > 0 && digits[i - 1] == '9') {
+			digits[--i] = '0';
+		}
+		if (i == 0) {
+			memmove(digits + 1, digits, n);
+			digits[0] = '1';
+			digits[n + 1] = '\0';
+			++*exp;
+		} else {
+			digits[i - 1]++;
+		}
+	}
+	return false;
+}
+
+// The same in every wrapper language: shortest digits, positional from 1e-5
+// to 1e17, else with an exponent.
+static void put_float(buf *b, double f) {
+	if (isnan(f)) {
+		puts_(b, "nan");
+		return;
+	}
+	if (isinf(f)) {
+		puts_(b, f > 0 ? "inf" : "-inf");
+		return;
+	}
+	char digits[40];
+	int exp = 0;
+	for (int prec = 0; prec < 17; prec++) {
+		if (shortest(f, prec, digits, &exp)) {
+			break;
+		}
+	}
+	size_t n = strlen(digits);
+	while (n > 1 && digits[n - 1] == '0') {
+		digits[--n] = '\0';
+	}
+	if (signbit(f)) {
+		putc_(b, '-');
+	}
+	if (exp >= 17 || exp < -5) {
+		putc_(b, digits[0]);
+		if (n > 1) {
+			putc_(b, '.');
+			put(b, digits + 1, n - 1);
+		}
+		putc_(b, 'e');
+		put_i64(b, exp);
+	} else if (exp < 0) {
+		puts_(b, "0.");
+		for (int i = 0; i < -exp - 1; i++) {
+			putc_(b, '0');
+		}
+		put(b, digits, n);
+	} else if (n <= (size_t)exp + 1) {
+		put(b, digits, n);
+		for (size_t i = n; i < (size_t)exp + 1; i++) {
+			putc_(b, '0');
+		}
+		puts_(b, ".0");
+	} else {
+		put(b, digits, (size_t)exp + 1);
+		putc_(b, '.');
+		put(b, digits + exp + 1, n - (size_t)exp - 1);
+	}
+}
+
+// Go's strconv.ParseInt(s, 10, 64).
+static bool parse_int(const char *s, int64_t *out) {
+	bool neg = *s == '-';
+	if (*s == '-' || *s == '+') {
+		s++;
+	}
+	if (!*s) {
+		return false;
+	}
+	uint64_t v = 0;
+	for (; *s; s++) {
+		if (*s < '0' || *s > '9') {
+			return false;
+		}
+		unsigned digit = (unsigned)(*s - '0');
+		if (v > (UINT64_MAX - digit) / 10) {
+			return false;
+		}
+		v = v * 10 + digit;
+	}
+	if (neg) {
+		if (v > (uint64_t)INT64_MAX + 1) {
+			return false;
+		}
+		*out = v == (uint64_t)INT64_MAX + 1 ? INT64_MIN : -(int64_t)v;
+	} else {
+		if (v > (uint64_t)INT64_MAX) {
+			return false;
+		}
+		*out = (int64_t)v;
+	}
+	return true;
+}
+
+// Plain decimal and exponent forms, plus nan, inf, and -inf. A number too big
+// is infinity, as Rust reads it.
+static bool parse_float(const char *s, double *out) {
+	if (!strcmp(s, "nan")) {
+		*out = NAN;
+		return true;
+	}
+	if (!strcmp(s, "inf") || !strcmp(s, "-inf")) {
+		*out = *s == '-' ? -INFINITY : INFINITY;
+		return true;
+	}
+	if (!*s || !((*s >= '0' && *s <= '9') || *s == '.' || *s == '-' || *s == '+')) {
+		return false;
+	}
+	for (const char *p = s; *p; p++) {
+		bool letter = (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z');
+		if (*p == '_' || (letter && *p != 'e' && *p != 'E')) {
+			return false;
+		}
+	}
+	char *end = NULL;
+	errno = 0;
+	*out = strtod(s, &end);
+	return end && *end == '\0' && end != s;
+}
+
+typedef struct {
+	char **v;
+	size_t *len;
+	size_t n;
+} fields;
+
+// Splits a script line on tabs and undoes \t, \n, \r, and \\.
+static bool split_fields(const char *line, size_t len, fields *f) {
+	static const char escaped[] = "tnr\\";
+	static const char unescaped[] = "\t\n\r\\";
+	size_t count = 1;
+	for (size_t i = 0; i < len; i++) {
+		if (line[i] == '\t') {
+			count++;
+		}
+	}
+	f->v = (char **)calloc(count, sizeof(char *));
+	f->len = (size_t *)calloc(count, sizeof(size_t));
+	f->n = 0;
+	if (!f->v || !f->len) {
+		return false;
+	}
+	size_t start = 0;
+	for (size_t i = 0; i <= len; i++) {
+		if (i < len && line[i] != '\t') {
+			continue;
+		}
+		char *field = (char *)malloc(i - start + 1);
+		if (!field) {
+			return false;
+		}
+		size_t n = 0;
+		for (size_t j = start; j < i; j++) {
+			if (line[j] != '\\' || j + 1 == i) {
+				field[n++] = line[j];
+				continue;
+			}
+			const char *at = (const char *)memchr(escaped, line[j + 1], sizeof escaped - 1);
+			if (at) {
+				field[n++] = unescaped[at - escaped];
+			} else {
+				field[n++] = '\\';
+				field[n++] = line[j + 1];
+			}
+			j++;
+		}
+		field[n] = '\0';
+		f->len[f->n] = n;
+		f->v[f->n++] = field;
+		start = i + 1;
+	}
+	return true;
+}
+
+static void free_fields(fields *f) {
+	for (size_t i = 0; i < f->n; i++) {
+		free(f->v[i]);
+	}
+	free((void *)f->v);
+	free(f->len);
+}
+
+typedef struct {
+	const char *input;
+	size_t input_len;
+	const char *dir;
+	shclw_doc *doc;
+	buf out;
+	// The op C doesn't have yet that would have changed the document, after
+	// which nothing can be compared until a parse starts over.
+	const char *behind;
+} runner;
+
+// Fields are NUL-terminated for the C API's paths, which can't hold a NUL.
+// Values go by len.
+static const char *arg(const fields *f, size_t i) { return i < f->n ? f->v[i] : ""; }
+static size_t arg_len(const fields *f, size_t i) { return i < f->n ? f->len[i] : 0; }
+
+static void line_out(runner *r, const char *z) {
+	puts_(&r->out, z);
+	nl(&r->out);
+}
+
+static void result(runner *r, shclw_kind k) {
+	if (k == SHCLW_OK) {
+		line_out(r, "ok");
+		return;
+	}
+	puts_(&r->out, "error ");
+	line_out(r, shclw_kind_name(k));
+}
+
+// Multi-line text one line per output line, so a want file diff shows which
+// line changed.
+static void block(runner *r, const char *text, size_t n) {
+	size_t start = 0;
+	for (size_t i = 0; i < n; i++) {
+		if (text[i] == '\n') {
+			puts_(&r->out, "| ");
+			esc(&r->out, text + start, i - start);
+			nl(&r->out);
+			start = i + 1;
+		}
+	}
+	if (start < n) {
+		puts_(&r->out, "| ");
+		esc(&r->out, text + start, n - start);
+		nl(&r->out);
+		line_out(r, "(no newline at end)");
+	}
+}
+
+static void head(buf *b, shclw_status s, size_t line) {
+	puts_(b, shclw_status_name(s));
+	putc_(b, '\t');
+	put_size(b, line);
+	putc_(b, '\t');
+}
+
+// An array's length goes before its items, so [] and [""] print differently.
+static void counted_strs(buf *b, const shclw_string *v, size_t n) {
+	put_size(b, n);
+	for (size_t i = 0; i < n; i++) {
+		putc_(b, '\t');
+		esc(b, v[i].p, v[i].n);
+	}
+}
+
+static void counted_ints(buf *b, const int64_t *v, size_t n) {
+	put_size(b, n);
+	for (size_t i = 0; i < n; i++) {
+		putc_(b, '\t');
+		put_i64(b, v[i]);
+	}
+}
+
+static void counted_floats(buf *b, const double *v, size_t n) {
+	put_size(b, n);
+	for (size_t i = 0; i < n; i++) {
+		putc_(b, '\t');
+		put_float(b, v[i]);
+	}
+}
+
+static void nomem(buf *b) { b->oom = true; }
+
+static void get(runner *r, const char *type, const char *path) {
+	buf *b = &r->out;
+	shclw_doc *d = r->doc;
+	if (!strcmp(type, "int")) {
+		shclw_got_int g = shclw_get_int(d, path);
+		head(b, g.status, g.line);
+		put_i64(b, g.value);
+	} else if (!strcmp(type, "float")) {
+		shclw_got_float g = shclw_get_float(d, path);
+		head(b, g.status, g.line);
+		put_float(b, g.value);
+	} else if (!strcmp(type, "bool")) {
+		shclw_got_bool g = shclw_get_bool(d, path);
+		head(b, g.status, g.line);
+		puts_(b, g.value ? "true" : "false");
+	} else if (!strcmp(type, "str") || !strcmp(type, "raw")) {
+		shclw_got_str g = !strcmp(type, "str") ? shclw_get_str(d, path) : shclw_get_raw(d, path);
+		if (!g.value) {
+			nomem(b);
+			return;
+		}
+		head(b, g.status, g.line);
+		esc(b, g.value, g.len);
+		free(g.value);
+	} else if (!strcmp(type, "strs")) {
+		shclw_got_strs g = shclw_get_strs(d, path);
+		if (!g.value) {
+			nomem(b);
+			return;
+		}
+		head(b, g.status, g.line);
+		counted_strs(b, g.value, g.n);
+		free(g.value);
+	} else if (!strcmp(type, "ints")) {
+		shclw_got_ints g = shclw_get_ints(d, path);
+		if (!g.value) {
+			nomem(b);
+			return;
+		}
+		head(b, g.status, g.line);
+		counted_ints(b, g.value, g.n);
+		free(g.value);
+	} else if (!strcmp(type, "floats")) {
+		shclw_got_floats g = shclw_get_floats(d, path);
+		if (!g.value) {
+			nomem(b);
+			return;
+		}
+		head(b, g.status, g.line);
+		counted_floats(b, g.value, g.n);
+		free(g.value);
+	} else {
+		puts_(b, "error badtype");
+	}
+	nl(b);
+}
+
+static void or_(runner *r, const fields *f) {
+	buf *b = &r->out;
+	shclw_doc *d = r->doc;
+	const char *type = arg(f, 1);
+	const char *path = arg(f, 2);
+	const char *first = arg(f, 3);
+	size_t nfall = f->n > 3 ? f->n - 3 : 0;
+	if (!strcmp(type, "int")) {
+		int64_t v = 0;
+		if (!parse_int(first, &v)) {
+			line_out(r, "error badvalue");
+			return;
+		}
+		put_i64(b, shclw_int(d, path, v));
+	} else if (!strcmp(type, "float")) {
+		double v = 0;
+		if (!parse_float(first, &v)) {
+			line_out(r, "error badvalue");
+			return;
+		}
+		put_float(b, shclw_float(d, path, v));
+	} else if (!strcmp(type, "bool")) {
+		puts_(b, shclw_bool(d, path, !strcmp(first, "true")) ? "true" : "false");
+	} else if (!strcmp(type, "str") || !strcmp(type, "raw")) {
+		size_t len = 0;
+		char *v = !strcmp(type, "str") ? shclw_str(d, path, first, arg_len(f, 3), &len)
+		                               : shclw_raw(d, path, first, arg_len(f, 3), &len);
+		if (!v) {
+			nomem(b);
+			return;
+		}
+		esc(b, v, len);
+		free(v);
+	} else if (!strcmp(type, "strs")) {
+		shclw_string *fall = (shclw_string *)shclw_i_alloc(nfall * sizeof(shclw_string));
+		if (!fall) {
+			nomem(b);
+			return;
+		}
+		for (size_t i = 0; i < nfall; i++) {
+			fall[i].p = f->v[i + 3];
+			fall[i].n = f->len[i + 3];
+		}
+		size_t n = 0;
+		shclw_string *v = shclw_strs(d, path, fall, nfall, &n);
+		free(fall);
+		if (!v) {
+			nomem(b);
+			return;
+		}
+		counted_strs(b, v, n);
+		free(v);
+	} else if (!strcmp(type, "ints") || !strcmp(type, "floats")) {
+		bool ints = !strcmp(type, "ints");
+		int64_t *ifall = (int64_t *)shclw_i_alloc(nfall * sizeof(int64_t));
+		double *ffall = (double *)shclw_i_alloc(nfall * sizeof(double));
+		bool ok = ifall && ffall;
+		for (size_t i = 0; ok && i < nfall; i++) {
+			ok = ints ? parse_int(f->v[i + 3], &ifall[i]) : parse_float(f->v[i + 3], &ffall[i]);
+		}
+		if (!ok) {
+			if (ifall && ffall) {
+				line_out(r, "error badvalue");
+			} else {
+				nomem(b);
+			}
+			free(ifall);
+			free(ffall);
+			return;
+		}
+		size_t n = 0;
+		if (ints) {
+			int64_t *v = shclw_ints(d, path, ifall, nfall, &n);
+			if (!v) {
+				nomem(b);
+				free(ifall);
+				free(ffall);
+				return;
+			}
+			counted_ints(b, v, n);
+			free(v);
+		} else {
+			double *v = shclw_floats(d, path, ffall, nfall, &n);
+			if (!v) {
+				nomem(b);
+				free(ifall);
+				free(ffall);
+				return;
+			}
+			counted_floats(b, v, n);
+			free(v);
+		}
+		free(ifall);
+		free(ffall);
+	} else {
+		puts_(b, "error badtype");
+	}
+	nl(b);
+}
+
+static void parse(runner *r, const fields *f) {
+	const char *level = arg(f, 1);
+	shclw_strictness s = SHCLW_STANDARD;
+	if (!strcmp(level, "loose")) {
+		s = SHCLW_LOOSE;
+	} else if (!strcmp(level, "strict")) {
+		s = SHCLW_STRICT;
+	}
+	shclw_doc *doc = NULL;
+	shclw_kind k = shclw_parse_with(r->input, r->input_len, s, &doc, NULL);
+	if (!doc) {
+		nomem(&r->out);
+		return;
+	}
+	shclw_free(r->doc);
+	r->doc = doc;
+	r->behind = NULL;
+	result(r, k);
+}
+
+static void text(runner *r, bool canonical) {
+	size_t n = 0;
+	char *t = canonical ? shclw_canonical(r->doc, &n) : shclw_text(r->doc, &n);
+	if (!t) {
+		nomem(&r->out);
+		return;
+	}
+	block(r, t, n);
+	free(t);
+}
+
+static void diags(runner *r) {
+	size_t n = 0;
+	shclw_diag *ds = shclw_diags(r->doc, &n);
+	if (!ds) {
+		nomem(&r->out);
+		return;
+	}
+	for (size_t i = 0; i < n; i++) {
+		put_size(&r->out, ds[i].line);
+		putc_(&r->out, '\t');
+		puts_(&r->out, shclw_severity_name(ds[i].severity));
+		putc_(&r->out, '\t');
+		put(&r->out, ds[i].code.p, ds[i].code.n);
+		putc_(&r->out, '\t');
+		esc(&r->out, ds[i].message.p, ds[i].message.n);
+		nl(&r->out);
+	}
+	free(ds);
+}
+
+// Keeps a script's file names inside dir. Go's filepath.Base check.
+static char *file(runner *r, const char *name) {
+	bool nested = strchr(name, '/') && strcmp(name, "/") != 0;
+	if (!r->dir || !*name || nested || !strcmp(name, "..")) {
+		line_out(r, "error unsupported");
+		return NULL;
+	}
+	size_t n = strlen(r->dir) + strlen(name) + 2;
+	char *path = (char *)malloc(n);
+	if (!path) {
+		nomem(&r->out);
+		return NULL;
+	}
+	(void)snprintf(path, n, "%s/%s", r->dir, name);
+	return path;
+}
+
+static void write_(runner *r, const fields *f) {
+	char *path = file(r, arg(f, 1));
+	if (!path) {
+		return;
+	}
+	shclw_kind k = shclw_write(r->doc, path, NULL);
+	char *saved = NULL;
+	size_t n = 0;
+	if (k == SHCLW_OK) {
+		k = shclw_read_text(path, &saved, &n, NULL);
+	}
+	free(path);
+	if (k != SHCLW_OK) {
+		result(r, k);
+		return;
+	}
+	line_out(r, "ok");
+	block(r, saved, n);
+	free(saved);
+}
+
+static void op_parse(runner *r, const fields *f) { parse(r, f); }
+static void op_text(runner *r, const fields *f) {
+	(void)f;
+	text(r, false);
+}
+static void op_canonical(runner *r, const fields *f) {
+	(void)f;
+	text(r, true);
+}
+static void op_diags(runner *r, const fields *f) {
+	(void)f;
+	diags(r);
+}
+static void op_errors(runner *r, const fields *f) {
+	(void)f;
+	put_size(&r->out, shclw_errors(r->doc));
+	nl(&r->out);
+}
+static void op_get(runner *r, const fields *f) { get(r, arg(f, 1), arg(f, 2)); }
+static void op_or(runner *r, const fields *f) { or_(r, f); }
+static void op_write(runner *r, const fields *f) { write_(r, f); }
+
+// Every op in design.md's "Ops scripts". One with no function isn't in C yet
+// and prints "error notyet"; edits says it would have changed the document.
+// clang-format off
+static const struct {
+	const char *name;
+	void (*run)(runner *, const fields *);
+	bool edits;
+} ops[] = {
+	{"parse",     op_parse,     false},
+	{"text",      op_text,      false},
+	{"canonical", op_canonical, false},
+	{"rewrites",  NULL,         false},
+	{"diags",     op_diags,     false},
+	{"errors",    op_errors,    false},
+	{"get",       op_get,       false},
+	{"or",        op_or,        false},
+	{"has",       NULL,         false},
+	{"count",     NULL,         false},
+	{"line",      NULL,         false},
+	{"lines",     NULL,         false},
+	{"first",     NULL,         false},
+	{"last",      NULL,         false},
+	{"names",     NULL,         false},
+	{"each",      NULL,         false},
+	{"eachget",   NULL,         false},
+	{"put",       NULL,         true},
+	{"syntax",    NULL,         true},
+	{"comment",   NULL,         true},
+	{"remove",    NULL,         true},
+	{"info",      NULL,         true},
+	{"stamp",     NULL,         true},
+	{"check",     NULL,         false},
+	{"format",    NULL,         false},
+	{"upgrade",   NULL,         false},
+	{"write",     op_write,     false},
+};
+// clang-format on
+
+static void op(runner *r, const fields *f) {
+	const char *name = arg(f, 0);
+	for (size_t i = 0; i < sizeof ops / sizeof ops[0]; i++) {
+		if (strcmp(ops[i].name, name) != 0) {
+			continue;
+		}
+		if (r->behind && ops[i].run != op_parse) {
+			puts_(&r->out, "error notyet after ");
+			line_out(r, r->behind);
+		} else if (!ops[i].run) {
+			line_out(r, "error notyet");
+			if (ops[i].edits) {
+				r->behind = ops[i].name;
+			}
+		} else {
+			ops[i].run(r, f);
+		}
+		return;
+	}
+	line_out(r, "error unknownop");
+}
+
+// Go's strings.TrimSpace(line) == "": every byte is Unicode white space.
+static bool blank(const char *s, size_t n) {
+	for (size_t i = 0; i < n;) {
+		uint32_t c = 0;
+		size_t size = shclw_i_utf8_next(s + i, n - i, &c);
+		bool space = (c >= 0x09 && c <= 0x0D) || c == 0x20 || c == 0x85 || c == 0xA0 || c == 0x1680 ||
+		             (c >= 0x2000 && c <= 0x200A) || c == 0x2028 || c == 0x2029 || c == 0x202F || c == 0x205F ||
+		             c == 0x3000;
+		if (!size || !space) {
+			return false;
+		}
+		i += size;
+	}
+	return true;
+}
+
+char *shclw_run(const char *input, size_t len, const char *script, size_t script_len, const char *dir,
+                size_t *out_len) {
+	*out_len = 0;
+	if (!script) {
+		script = "";
+		script_len = 0;
+	}
+	runner r = {input, len, dir, shclw_parse(input, len), {NULL, 0, 0, false}, NULL};
+	if (!r.doc) {
+		return NULL;
+	}
+	puts_(&r.out, "");
+	for (size_t start = 0; start <= script_len && !r.out.oom;) {
+		size_t end = start;
+		while (end < script_len && script[end] != '\n') {
+			end++;
+		}
+		size_t n = end - start;
+		while (n > 0 && script[start + n - 1] == '\r') {
+			n--;
+		}
+		const char *line = script + start;
+		start = end + 1;
+		if (blank(line, n) || line[0] == '#') {
+			continue;
+		}
+		puts_(&r.out, "> ");
+		put(&r.out, line, n);
+		nl(&r.out);
+		fields f = {NULL, NULL, 0};
+		if (split_fields(line, n, &f)) {
+			op(&r, &f);
+		} else {
+			nomem(&r.out);
+		}
+		free_fields(&f);
+	}
+	shclw_free(r.doc);
+	if (r.out.oom) {
+		free(r.out.p);
+		return NULL;
+	}
+	*out_len = r.out.n;
+	return r.out.p;
+}

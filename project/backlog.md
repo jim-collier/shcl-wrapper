@@ -39,7 +39,7 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- A text command for anything the API doesn't bind.
 	- Progress log:
 		- 20261015: built, with `Inner()` for the rest of shcl and `Run` for ops scripts. The calls are listed in design.md.
-		- 20261015: tests turned up 5 places where versions behaved differently. The wrapper now does one thing for each, listed in design.md.
+		- 20261015: design.md lists where shcl versions behave differently and what the wrapper does instead.
 	- Branch: go-rust
 	- Test case: tests/cases 001 to 010, Go `api_test.go`, Rust `tests/api.rs`
 
@@ -55,7 +55,7 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- A regression test for every feature and fix.
 	- Progress log:
 		- 20261015: `cicd/cicd.bash` runs format, lint, tests, and fuzzing. `--gate` is the pre-push hook.
-		- 20261015: Go and Rust read the same want files, so they can't drift. Each check was seen to fail before it was trusted.
+		- 20261015: Go and Rust read the same want files, so they can't drift.
 		- 20261015: 15,000 fuzz cases in 90 seconds, Go against Rust, with no difference left.
 	- Branch: go-rust
 
@@ -96,7 +96,7 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- The shcl version picked at compile time.
 		- Its own driver, run against the shared cases and in the fuzzer.
 	- Notes:
-		- Used by Cobblevale (C++) and Folderkite (C).
+		- Cobblevale uses it from C++, and Folderkite from C.
 		- shcl's C header has no version macro before 3.0, so 1.2 and 2.0 are told apart by what they declare.
 
 - Python wrapper

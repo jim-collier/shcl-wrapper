@@ -313,11 +313,8 @@ func Normalize(path string, v any) (Value, error) {
 	return Value{}, &Error{Kind: ErrBadValue, Path: path, Msg: fmt.Sprintf("no setter for %T", v)}
 }
 
-// VerifyPut reads back what a setter just wrote. shcl can accept a value
-// and then read something else, such as a one-item array of "" coming back
-// empty, or a path with two instances reading as Multiple. The edit stays
-// either way; ErrNoReadBack says it didn't take. An empty array reading as
-// Empty is accepted, since 1.2 and 2.0 have no way to write one.
+// VerifyPut reads back what a setter wrote, since shcl can take a value and
+// read back something else. See "What the wrapper evens out" in design.md.
 func VerifyPut(d Doc, path string, v Value) error {
 	var st Status
 	same := false

@@ -50,9 +50,9 @@ If your program uses one shcl version and doesn't plan to move, you don't need t
 
 - Walking repeated entries without writing selector syntax, which changed between versions.
 
-- Every write is read back, so a value shcl accepted but stored differently is reported instead of saved.
+- Every write is read back. A value shcl stored differently than it was given comes back as an error.
 
-- A file written for a newer format is refused with a clear error, rather than read wrong.
+- A file written for a newer format is refused with a clear error.
 
 - Format upgrades with a backup of the original, where the shcl underneath can do one.
 

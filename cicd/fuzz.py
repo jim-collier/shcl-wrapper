@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 ## Purpose: Fuzzes the wrappers against each other. Each case is a document
 ##	plus an ops script, made from one seed, run through the Go and Rust
-##	drivers with the same shcl version. The two outputs must match byte for
+##	drivers with the same shcl version. The outputs must match byte for
 ##	byte, and a value that was put must read back the same.
 ## Copyright © 2026 Jim Collier [ID: 2უNაɘ«҂թȹɤξπ๙¿ձϖ]
 ## SPDX-License-Identifier: MIT

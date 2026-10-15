@@ -362,11 +362,8 @@ pub trait Lib {
 	fn upgrade(text: &str, from: u32) -> Result<Upgraded, Error>;
 }
 
-/// Reads back what a setter just wrote. shcl can accept a value and then
-/// read something else, such as a one-item array of "" coming back empty, or
-/// a path with two instances reading as `Multiple`. The edit stays either
-/// way; `NoReadBack` says it didn't take. An empty array reading as `Empty`
-/// is accepted, since 1.2 and 2.0 have no way to write one.
+/// Reads back what a setter wrote, since shcl can take a value and read back
+/// something else. See "What the wrapper evens out" in design.md.
 // A float has to come back exactly, so no margin.
 #[allow(clippy::float_cmp)]
 pub fn verify_put<D: ShclDoc + ?Sized>(d: &D, path: &str, v: &Value) -> Result<(), Error> {

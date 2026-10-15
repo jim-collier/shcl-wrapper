@@ -69,7 +69,7 @@ Status: draft, 2026-10-15. Go and Rust are built over shcl 1.2, 2.0, and 3.0. C 
 
 - Covering all of shcl. Raw blocks, datetimes, durations, sizes, merging, schema generation, and the info block stay with shcl, through `Inner()`.
 
-- Hiding the file format change. A program built on 1.2 can't read a format 3 file. The wrapper says so plainly, with `ErrTooNew`, and `Upgrade` moves files forward where the bound shcl can.
+- Hiding the file format change. A program built on 1.2 can't read a format 3 file. The wrapper says so with `ErrTooNew`, and `Upgrade` moves files forward where the bound shcl can.
 
 - Publishing to a package registry.
 
@@ -81,14 +81,14 @@ Status: draft, 2026-10-15. Go and Rust are built over shcl 1.2, 2.0, and 3.0. C 
 
 - The wrapper can't help with what it doesn't cover. A program that leans on line-keeping saves, merges, or the info block still has those calls to move by hand when shcl changes them.
 
-- It would stop being worth it if it grew toward shcl's own size. The line is the basics plus whatever two or more programs need.
+- It would stop being worth it if it grew toward shcl's own size. The line is the basics plus whatever 2 or more programs need.
 
 ## Layout
 
-| Language | Where                                         | Pick the shcl version by
-| :---     | :---                                          | :---
+| Language | Where                                        | Pick the shcl version by
+| :---     | :---                                         | :---
 | Go       | `source/go/shclw`, plus `shclw1` to `shclw3` | import path: `.../source/go/shclw3`
-| Rust     | `source/rust`, crate `shclw`                  | feature `shcl1` to `shcl3`, then module `shclw::v1` to `shclw::v3`
+| Rust     | `source/rust`, crate `shclw`                 | feature `shcl1` to `shcl3`, then module `shclw::v1` to `shclw::v3`
 
 - Go can't import one package or another by condition inside one file, so each shcl version gets its own small package. They have the same calls, checked by the compiler against the `shclw.Doc` interface. The shared types and the ops runner are in `shclw`.
 
@@ -102,19 +102,19 @@ Go names are listed. Rust uses the same words in snake case, and `ShclDoc` has t
 
 ### Loading and saving
 
-| Call                       | Does
-| :---                       | :---
-| `New()`                    | An empty document.
-| `Parse(text)`              | Never fails. Problems are in `Diags()`.
-| `ParseWith(text, level)`   | `Loose`, `Standard`, or `Strict`. Only `Strict` fails, with `ErrStrict`.
-| `Open(path)`               | Reads and parses a file. A missing file is `ErrNotFound`, and a newer format is `ErrTooNew`.
-| `OpenWith(path, level)`    | `Open` at a strictness.
-| `d.Text()`                 | The document as it would be saved.
-| `d.Canonical()`            | The document in canonical form.
-| `d.Write(path)`            | Saves `Text()` atomically.
-| `d.Diags()`, `d.Errors()`  | The load's diagnostics, and how many are errors.
-| `d.Check(schema)`          | Validates against a schema document.
-| `schema.DropDeclared(ds)`  | Drops the repeat hints for keys the schema says repeat.
+| Call                      | Does
+| :---                      | :---
+| `New()`                   | An empty document.
+| `Parse(text)`             | Never fails. Problems are in `Diags()`.
+| `ParseWith(text, level)`  | `Loose`, `Standard`, or `Strict`. Only `Strict` fails, with `ErrStrict`.
+| `Open(path)`              | Reads and parses a file. A missing file is `ErrNotFound`, and a newer format is `ErrTooNew`.
+| `OpenWith(path, level)`   | `Open` at a strictness.
+| `d.Text()`                | The document as it would be saved.
+| `d.Canonical()`           | The document in canonical form.
+| `d.Write(path)`           | Saves `Text()` atomically.
+| `d.Diags()`, `d.Errors()` | The load's diagnostics, and how many are errors.
+| `d.Check(schema)`         | Validates against a schema document.
+| `schema.DropDeclared(ds)` | Drops the repeat hints for keys the schema says repeat.
 
 ### Reads
 
@@ -147,12 +147,12 @@ Go names are listed. Rust uses the same words in snake case, and `ShclDoc` has t
 
 ### Writes
 
-| Call                       | Does
-| :---                       | :---
-| `d.Put(path, v)`           | Sets an int, float, bool, string, or a slice of strings, ints, or floats.
-| `d.PutSyntax(path, text)`  | Sets a value written in shcl's own syntax.
-| `d.Comment(path, text)`    | Sets the comment above a path.
-| `d.Remove(path)`           | Takes out a path and everything under it, and says how many instances went.
+| Call                      | Does
+| :---                      | :---
+| `d.Put(path, v)`          | Sets an int, float, bool, string, or a slice of strings, ints, or floats.
+| `d.PutSyntax(path, text)` | Sets a value written in shcl's own syntax.
+| `d.Comment(path, text)`   | Sets the comment above a path.
+| `d.Remove(path)`          | Takes out a path and everything under it, and says how many instances went.
 
 ### Format and upgrade
 
@@ -180,19 +180,19 @@ Go names are listed. Rust uses the same words in snake case, and `ShclDoc` has t
 
 ## What the wrapper evens out
 
-Most of these were found by the tests or the fuzzer. Each has a test, either a shared case or an API test.
+Each row has a test, either a shared case or an API test.
 
-| Behavior                                   | shcl did                                                   | The wrapper does
-| :---                                       | :---                                                       | :---
-| `Names` on a path with several instances   | 1.2 and 2.0 give nothing. 3.0 lists every instance's children. | Lists every instance's children, everywhere.
-| `Names` with a name given twice            | Lists it once per line.                                    | Lists it once.
-| `Put` on a path with several instances     | 1.2 and 2.0 set something and say ok. 3.0 refuses.        | Refuses with `BadPath`, everywhere, and changes nothing.
-| A put that doesn't read back the same      | Says ok.                                                   | Reads every put back. A mismatch is `NoReadBack`, with the edit left in place.
-| Opening a newer format's file              | 1.2 and 2.0 read it, wrongly.                              | `ErrTooNew`.
-| A file that isn't UTF-8                    | Varies by language.                                        | `ErrIO`, everywhere.
-| Walking repeated entries                   | Selector syntax differs by version.                        | `Each` gives paths, and `Child` extends them.
-| Saving in 1.2                              | No save call.                                              | `Write` saves atomically.
-| Rust 1.2 fallback reads                    | No `get_*_or`.                                              | `int(path, fallback)` and the rest, as in every other version.
+| Behavior                                 | shcl did                                                       | The wrapper does
+| :---                                     | :---                                                           | :---
+| `Names` on a path with several instances | 1.2 and 2.0 give nothing. 3.0 lists every instance's children. | Lists every instance's children, everywhere.
+| `Names` with a name given twice          | Lists it once per line.                                        | Lists it once.
+| `Put` on a path with several instances   | 1.2 and 2.0 set something and say ok. 3.0 refuses.             | Refuses with `BadPath`, everywhere, and changes nothing.
+| A put that doesn't read back the same    | Says ok.                                                       | Reads every put back. A mismatch is `NoReadBack`, with the edit left in place.
+| Opening a newer format's file            | 1.2 and 2.0 read it, wrongly.                                  | `ErrTooNew`.
+| A file that isn't UTF-8                  | Varies by language.                                            | `ErrIO`, everywhere.
+| Walking repeated entries                 | Selector syntax differs by version.                            | `Each` gives paths, and `Child` extends them.
+| Saving in 1.2                            | No save call.                                                  | `Write` saves atomically.
+| Rust 1.2 fallback reads                  | No `get_*_or`.                                                 | `int(path, fallback)` and the rest, as in every other version.
 
 - An empty array reads back as `Empty` on 1.2 and 2.0, and as an empty `Good` on 3.0. The older formats can't write one any other way, so the wrapper accepts both.
 
@@ -200,22 +200,22 @@ Most of these were found by the tests or the fuzzer. Each has a test, either a s
 
 An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, and `\\` in a field are a tab, newline, return, and backslash. Blank lines and lines starting with `#` are skipped.
 
-| Op                              | Prints
-| :---                            | :---
-| `parse [loose\|standard\|strict]` | `ok` or `error strict`, and the document is reloaded
-| `text`, `canonical`             | the document, one `\|`-prefixed line per line
-| `diags`, `errors`               | each diagnostic as line, severity, code, and message, or the count
-| `get TYPE PATH`                 | status, line, and the value. Arrays print a count, then the items.
-| `or TYPE PATH FALLBACK...`      | the value or the fallback
-| `has`, `count`, `line`, `names` | the answer for PATH
-| `each PATH`                     | index, line, and value, one instance per line
-| `eachget TYPE PATH CHILD`       | `get` of CHILD under each instance
-| `put TYPE PATH VALUE...`        | `ok` or `error KIND`
+| Op                                      | Prints
+| :---                                    | :---
+| `parse [loose\|standard\|strict]`       | `ok` or `error strict`, and the document is reloaded
+| `text`, `canonical`                     | the document, one `\|`-prefixed line per line
+| `diags`, `errors`                       | each diagnostic as line, severity, code, and message, or the count
+| `get TYPE PATH`                         | status, line, and the value. Arrays print a count, then the items.
+| `or TYPE PATH FALLBACK...`              | the value or the fallback
+| `has`, `count`, `line`, `names`         | the answer for PATH
+| `each PATH`                             | index, line, and value, one instance per line
+| `eachget TYPE PATH CHILD`               | `get` of CHILD under each instance
+| `put TYPE PATH VALUE...`                | `ok` or `error KIND`
 | `syntax PATH TEXT`, `comment PATH TEXT` | `ok` or `error KIND`
-| `remove PATH`                   | how many instances went
-| `check FILE [all\|drop]`         | the schema check, with the load's own diagnostics for `all`, and then dropped ones for `drop`
-| `format`, `upgrade [FROM]`      | the format number, or the upgrade's result and text
-| `write FILE`                    | `ok` and the saved file, or `error KIND`
+| `remove PATH`                           | how many instances went
+| `check FILE [all\|drop]`                | the schema check, with the load's own diagnostics for `all`, and then dropped ones for `drop`
+| `format`, `upgrade [FROM]`              | the format number, or the upgrade's result and text
+| `write FILE`                            | `ok` and the saved file, or `error KIND`
 
 - TYPE is `int`, `float`, `bool`, `str`, `strs`, `ints`, `floats`, or `raw`.
 
@@ -229,7 +229,7 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 
 ### Shared cases
 
-- Each folder in `tests/cases` is a document, an ops script, and one `want.vN.txt` per shcl version. Go and Rust both run every case on every version and compare with the same want files, so the two languages can't drift apart.
+- Each folder in `tests/cases` is a document, an ops script, and one `want.vN.txt` per shcl version. Go and Rust both run every case on every version and compare with the same want files, so Go and Rust can't drift apart.
 
 - A file named `x.vK.ext` stands in for `x.ext` from version K up. So `doc.v1.shcl` is the document for 1.2 and 2.0, and `doc.v3.shcl` for 3.0, where the syntax differs.
 
@@ -259,13 +259,13 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 
 ## Decisions
 
-- The wrapper has its own small set of names, taking ideas from shcl 4's design rather than its exact names. Matching 4's names would have tied the wrapper to a draft that may still change.
+- The wrapper has its own small set of names. Some of its ideas come from shcl 4's design, but its names don't, since 4 is a draft that may still change.
 
 - All 4 shcl versions are covered: 1.2, 2.0, 3.0, and 4 once it exists. 2.0 has no program running on it today, but some tests still write 2.0 files and also read them.
 
-- Go uses one package per shcl version over build tags. With tags, forgetting the tag builds against a different shcl with no error. An import path can't be forgotten.
+- Go has one package per shcl version. Build tags were the other choice, but a build that leaves out the tag compiles against another shcl with no error.
 
-- Rust uses one crate with a module per version over separate crates, so a program that needs two versions at once can have both.
+- Rust uses one crate with a module per version over separate crates, so a program that needs 2 versions at once can have both.
 
 - Each version's adapter is a full copy with its differences, over one generic adapter with hooks. Most of each adapter is the differences.
 

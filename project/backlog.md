@@ -140,6 +140,31 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Swept: `UpgradeFile` in Go `shclw1` to `shclw3` and Rust `v1` to `v3`. 1.2 and 2.0 read once and never write. No other call reads a file and then writes it.
 	- Acceptance signoff: Waiting. It changes what an upgrade writes and when it gives up, and a changed file could have its own error kind instead of `ErrIO`.
 
+- Say when Write rewrote the whole file
+	- ID: 2026101513330003
+	- Type: Feature
+	- Status: Waiting on signoff
+	- Priority: High
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Requirements:
+		- Write, or a call made before it, says when 3.0 couldn't keep the file's own lines and wrote the canonical form instead.
+	- Note: Quillroute compares the canonical text with what it read, and adds an "also" line to its plan. Wovenshell checks renames against the canonical form, since the fallback moves comments.
+	- Progress log:
+		- 20261015: at the pinned 3.0 commit, the save that keeps lines falls back to canonical form when its text wouldn't reload as the edited document, when an edit took a kept line it shouldn't have, or when the document wasn't loaded keeping lines or took a merge. shcl's design.md names a child added under a flat dotted line, a value changed where a selector elsewhere names it, and any edit to a file whose canonical order isn't its own.
+		- 20261015: 3.0 says so in both bindings. `ToTextKeepLines` and `SaveFileKeepLines` return a kept flag, which the wrapper dropped. 1.2 and 2.0 have no save that keeps lines, and always save canonical form.
+	- Decisions:
+		- `Rewrites()` is a call made before `Write`, beside `Text` and `Canonical`, rather than a second result from `Write`.
+		- 1.2 and 2.0 say true when the loaded text wasn't canonical, since that's when their save changes the file's lines. A canonical file says false, as 3.0 counts it.
+		- A `New` document says false. The 3.0 `New` now keeps lines from an empty text, which is the same document shcl's own `New` makes.
+		- design.md has these under Decisions, and the call under Loading and saving.
+	- Done: `Rewrites()` in Go and `rewrites()` in Rust, on all 3 versions, and a `rewrites` op for ops scripts.
+	- Verified: the gate, and a 20 second fuzz with Go against Rust and no difference. Before the change the 2 new cases failed in Go and Rust, with no want files and the op unknown. With the 3.0 `New` put back as it was, the new API test failed in Go and Rust.
+	- Branch: rewrote
+	- Commit: 4537b3c
+	- Test case: tests/cases 017-rewrites and 018-rewrites-canonical, Go `TestRewritesNew`, Rust `rewrites_new` in tests/api.rs.
+	- Swept: `Write`, `Text`, and `New` in Go `shclw1` to `shclw3` and Rust `v1` to `v3`, both ops runners, and fuzz.py's op list. `UpgradeFile` writes text it made itself, not a document, so it has no fallback to report.
+
 - PutSyntax doesn't read its value back
 	- ID: 2026101513330007
 	- Type: Bug
@@ -251,17 +276,6 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- The same API, over shcl 4.
 	- Notes:
 		- 4 keeps every line as typed, so Text and Write get simpler. Its read-back check in setters can replace the wrapper's.
-
-- Say when Write rewrote the whole file
-	- ID: 2026101513330003
-	- Type: Feature
-	- Status: Queued
-	- Priority: High
-	- Opened: 20261015-133300
-	- Opened by: JC
-	- Requirements:
-		- Write, or a call made before it, says when 3.0 couldn't keep the file's own lines and wrote the canonical form instead.
-	- Note: Quillroute compares the canonical text with what it read, and adds an "also" line to its plan. Wovenshell checks renames against the canonical form, since the fallback moves comments.
 
 - Pick the first or last of a repeated key
 	- ID: 2026101513330004

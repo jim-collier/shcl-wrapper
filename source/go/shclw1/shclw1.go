@@ -52,6 +52,8 @@ func KindOf(err error) ErrKind { return shclw.KindOf(err) }
 // Doc is a parsed document.
 type Doc struct {
 	d *shcl.Document
+	// The loaded text wasn't canonical, so a save changes its lines.
+	rewrites bool
 }
 
 var _ shclw.Doc = (*Doc)(nil)
@@ -71,7 +73,7 @@ var Lib = shclw.Lib{
 func New() *Doc { return &Doc{d: shcl.New()} }
 
 // Parse never fails. Problems are in Diags.
-func Parse(text string) *Doc { return &Doc{d: shcl.Parse(text)} }
+func Parse(text string) *Doc { return loaded(shcl.Parse(text), text) }
 
 // ParseWith fails only at Strict, with ErrStrict. The document comes back
 // either way.
@@ -81,14 +83,18 @@ func ParseWith(text string, s Strictness) (*Doc, error) {
 		d = shcl.New()
 	}
 	if err == nil {
-		return &Doc{d: d}, nil
+		return loaded(d, text), nil
 	}
 	e := &shclw.Error{Kind: shclw.ErrStrict, Err: err}
 	var le *shcl.LoadError
 	if errors.As(err, &le) {
 		e.Diags = diags(le.Diagnostics)
 	}
-	return &Doc{d: d}, e
+	return loaded(d, text), e
+}
+
+func loaded(d *shcl.Document, text string) *Doc {
+	return &Doc{d: d, rewrites: d.ToCanonical() != text}
 }
 
 // Open reads and parses a file. A missing file is ErrNotFound, and a file
@@ -148,6 +154,12 @@ func (d *Doc) Canonical() string { return d.d.ToCanonical() }
 
 // Write saves the document atomically.
 func (d *Doc) Write(path string) error { return shclw.WriteAtomic(path, d.d.ToCanonical()) }
+
+// Rewrites says whether Write puts the canonical form in place of the lines
+// the document was loaded from. 1.2 only saves canonical form, so that's
+// any loaded text that wasn't canonical already. A New document has no
+// lines to keep.
+func (d *Doc) Rewrites() bool { return d.rewrites }
 
 // Diags is what the load found.
 func (d *Doc) Diags() []Diag { return diags(d.d.Diagnostics()) }

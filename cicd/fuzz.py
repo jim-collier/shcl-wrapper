@@ -146,6 +146,7 @@ def gen_case(seed: int, corpus: list[str]) -> Case:
 						f"syntax\t{gen_path(rng)}\t{rng.choice(WORDS)}",
 						"text",
 						"canonical",
+						"rewrites",
 						"diags",
 						"errors",
 						"format",

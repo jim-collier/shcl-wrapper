@@ -5,7 +5,8 @@
 //
 // Documents keep their lines as typed, so Text and Write give back what was
 // read plus the edits, where 3.0 can manage that, and the canonical form
-// where it can't. Write refuses with ErrRefused rather than drop a line.
+// where it can't. Rewrites says which. Write refuses with ErrRefused rather
+// than drop a line.
 package shclw3
 
 import (
@@ -69,8 +70,9 @@ var Lib = shclw.Lib{
 	Upgrade:     Upgrade,
 }
 
-// New is an empty document.
-func New() *Doc { return &Doc{d: shcl.New()} }
+// New is an empty document. It keeps lines like a loaded one, so it has
+// none to lose and Rewrites says false.
+func New() *Doc { return Parse("") }
 
 // Parse never fails. Problems are in Diags.
 func Parse(text string) *Doc {
@@ -259,6 +261,15 @@ func (d *Doc) Write(path string) error {
 		return &shclw.Error{Kind: shclw.ErrNotFound, Path: path, Err: err}
 	}
 	return &shclw.Error{Kind: shclw.ErrIO, Path: path, Err: err}
+}
+
+// Rewrites says whether Write puts the canonical form in place of the lines
+// the document was loaded from. 3.0 does that when it can't keep them with
+// the edits in, such as after a child is added under a flat dotted line,
+// and comments can move. It builds the save's text to find out.
+func (d *Doc) Rewrites() bool {
+	_, kept := d.d.ToTextKeepLines()
+	return !kept
 }
 
 // Diags is what the load found.

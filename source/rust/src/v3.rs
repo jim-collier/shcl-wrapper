@@ -5,8 +5,8 @@
 //!
 //! Documents keep their lines as typed, so `text` and `write` give back what
 //! was read plus the edits, where 3.0 can manage that, and the canonical
-//! form where it can't. `write` refuses with `Refused` rather than drop a
-//! line.
+//! form where it can't. `rewrites` says which. `write` refuses with
+//! `Refused` rather than drop a line.
 
 /// The shcl crate underneath, so code using `inner()` can name its types.
 pub use shcl3 as shcl;
@@ -47,11 +47,10 @@ impl crate::Lib for Version {
 	}
 }
 
-/// An empty document.
+/// An empty document. It keeps lines like a loaded one, so it has none to
+/// lose and `rewrites` says false.
 pub fn new() -> Doc {
-	Doc {
-		d: shcl::Document::new(),
-	}
+	parse("")
 }
 
 /// Never fails. Problems are in `diags`.
@@ -261,6 +260,13 @@ impl ShclDoc for Doc {
 				Err(Error::new(kind).path(path).msg(w.message))
 			}
 		}
+	}
+
+	/// 3.0 writes the canonical form when it can't keep the lines with the
+	/// edits in, such as after a child is added under a flat dotted line,
+	/// and comments can move. This builds the save's text to find out.
+	fn rewrites(&self) -> bool {
+		!self.d.to_text_keep_lines().1
 	}
 
 	fn diags(&self) -> Vec<Diag> {

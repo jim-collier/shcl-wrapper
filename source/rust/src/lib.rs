@@ -302,6 +302,9 @@ pub trait ShclDoc {
 	fn canonical(&self) -> String;
 	/// Saves `text()` atomically.
 	fn write(&self, path: &str) -> Result<(), Error>;
+	/// Whether `write` puts the canonical form in place of the lines the
+	/// document was loaded from, so lines no edit touched can change.
+	fn rewrites(&self) -> bool;
 	/// What the load found.
 	fn diags(&self) -> Vec<Diag>;
 	/// Counts error diagnostics.
@@ -707,6 +710,7 @@ impl<L: Lib> Runner<'_, L> {
 			"parse" => self.parse(arg(1)),
 			"text" => self.block(&self.doc.text()),
 			"canonical" => self.block(&self.doc.canonical()),
+			"rewrites" => self.say(&self.doc.rewrites().to_string()),
 			"diags" => self.diags(&self.doc.diags()),
 			"errors" => self.say(&self.doc.errors().to_string()),
 			"get" => {

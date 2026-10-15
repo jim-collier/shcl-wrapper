@@ -22,6 +22,8 @@ pub const FORMAT_MAJOR: u32 = 1;
 #[derive(Debug)]
 pub struct Doc {
 	d: shcl::Document,
+	/// The loaded text wasn't canonical, so a save changes its lines.
+	rewrites: bool,
 }
 
 /// This module's calls as a [`crate::Lib`].
@@ -50,14 +52,13 @@ impl crate::Lib for Version {
 pub fn new() -> Doc {
 	Doc {
 		d: shcl::Document::new(),
+		rewrites: false,
 	}
 }
 
 /// Never fails. Problems are in `diags`.
 pub fn parse(text: &str) -> Doc {
-	Doc {
-		d: shcl::Document::parse(text),
-	}
+	loaded(shcl::Document::parse(text), text)
 }
 
 /// Fails only at `Strict`, with `ErrKind::Strict`.
@@ -70,13 +71,18 @@ pub fn parse_with(text: &str, level: Strictness) -> Result<Doc, Error> {
 
 fn parse_keep(text: &str, level: Strictness) -> (Doc, Option<Error>) {
 	match shcl::Document::parse_with(text, strictness(level)) {
-		Ok(d) => (Doc { d }, None),
+		Ok(d) => (loaded(d, text), None),
 		Err(le) => {
 			let mut e = Error::new(ErrKind::Strict).msg(le.to_string());
 			e.diags = diags(&le.diagnostics);
-			(Doc { d: le.document }, Some(e))
+			(loaded(le.document, text), Some(e))
 		}
 	}
+}
+
+fn loaded(d: shcl::Document, text: &str) -> Doc {
+	let rewrites = d.to_canonical() != text;
+	Doc { d, rewrites }
 }
 
 /// Reads and parses a file. A missing file is `NotFound`, and a file
@@ -164,6 +170,12 @@ impl ShclDoc for Doc {
 
 	fn write(&self, path: &str) -> Result<(), Error> {
 		crate::write_atomic(path, &self.d.to_canonical())
+	}
+
+	/// 1.2 only saves canonical form, so this is any loaded text that
+	/// wasn't canonical already. A `new` document has no lines to keep.
+	fn rewrites(&self) -> bool {
+		self.rewrites
 	}
 
 	fn diags(&self) -> Vec<Diag> {

@@ -1,0 +1,6 @@
+rewrites
+put	int	b.d	3
+rewrites
+remove	a
+rewrites
+write	out.shcl

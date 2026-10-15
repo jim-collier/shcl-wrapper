@@ -1,0 +1,30 @@
+> rewrites
+false
+> put	int	a	5
+ok
+> rewrites
+false
+> text
+| ## keep me
+| a: 5   # trailing
+| 
+| b.c: 2
+> put	int	b.d	3
+ok
+> rewrites
+true
+> text
+| ## keep me
+| a: 5  # trailing
+| b:
+| 
+| \tc: 2
+| \td: 3
+> write	out.shcl
+ok
+| ## keep me
+| a: 5  # trailing
+| b:
+| 
+| \tc: 2
+| \td: 3

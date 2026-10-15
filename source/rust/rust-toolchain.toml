@@ -1,0 +1,5 @@
+# Pin the toolchain so lint and build results stay the same on every box.
+# Only rustup honors this, so cicd puts ~/.cargo/bin first on PATH.
+[toolchain]
+channel = "1.96.0"
+components = ["rustfmt", "clippy"]

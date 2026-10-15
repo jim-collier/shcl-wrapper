@@ -1,0 +1,11 @@
+put	int	n	5
+get	int	n
+put	int	a	42
+get	int	a
+put	strs	e	
+get	strs	e
+put	strs	f
+get	strs	f
+put	strs	g	x	
+get	strs	g
+text

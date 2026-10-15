@@ -1,0 +1,5 @@
+## keep me
+a: 1   # trailing
+
+b:
+	c: 2

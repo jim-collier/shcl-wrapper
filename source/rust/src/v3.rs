@@ -1,0 +1,425 @@
+// Copyright © 2026 Jim Collier [ID: 2უNაɘ«҂թȹɤξπ๙¿ձϖ]
+// SPDX-License-Identifier: MIT
+
+//! The wrapper over shcl 3.0.
+//!
+//! Documents keep their lines as typed, so `text` and `write` give back what
+//! was read plus the edits, where 3.0 can manage that, and the canonical
+//! form where it can't. `write` refuses with `Refused` rather than drop a
+//! line.
+
+use shcl3 as shcl;
+
+use crate::{Diag, ErrKind, Error, Got, Node, Severity, ShclDoc, Status, Strictness, Upgraded, Value};
+
+/// The shcl release this module wraps.
+pub const SHCL_VERSION: &str = "3.0.0-dev+ea0998fa";
+
+/// The newest file format this shcl reads.
+pub const FORMAT_MAJOR: u32 = shcl::FORMAT_MAJOR;
+
+/// A parsed document.
+#[derive(Debug)]
+pub struct Doc {
+	d: shcl::Document,
+}
+
+/// This module's calls as a [`crate::Lib`].
+#[derive(Debug)]
+pub struct Version;
+
+impl crate::Lib for Version {
+	type Doc = Doc;
+	const NAME: &'static str = "shcl 3.0.0-dev+ea0998fa";
+	const FORMAT_MAJOR: u32 = FORMAT_MAJOR;
+	fn parse(text: &str) -> Doc {
+		parse(text)
+	}
+	fn parse_keep(text: &str, level: Strictness) -> (Doc, Option<Error>) {
+		parse_keep(text, level)
+	}
+	fn format_of(text: &str) -> u32 {
+		format_of(text)
+	}
+	fn upgrade(text: &str, from: u32) -> Result<Upgraded, Error> {
+		upgrade(text, from)
+	}
+}
+
+/// An empty document.
+pub fn new() -> Doc {
+	Doc {
+		d: shcl::Document::new(),
+	}
+}
+
+/// Never fails. Problems are in `diags`.
+pub fn parse(text: &str) -> Doc {
+	parse_keep(text, Strictness::Standard).0
+}
+
+/// Fails only at `Strict`, with `ErrKind::Strict`.
+pub fn parse_with(text: &str, level: Strictness) -> Result<Doc, Error> {
+	match parse_keep(text, level) {
+		(d, None) => Ok(d),
+		(_, Some(e)) => Err(e),
+	}
+}
+
+fn parse_keep(text: &str, level: Strictness) -> (Doc, Option<Error>) {
+	match shcl::Document::parse_keep_lines(text, strictness(level)) {
+		Ok(d) => (Doc { d }, None),
+		Err(le) => {
+			let mut e = Error::new(ErrKind::Strict).msg(le.to_string());
+			e.diags = diags(&le.diagnostics);
+			(Doc { d: le.document }, Some(e))
+		}
+	}
+}
+
+/// Reads and parses a file. A missing file is `NotFound`, and a file
+/// written for a newer format is `TooNew`.
+pub fn open(path: &str) -> Result<Doc, Error> {
+	open_with(path, Strictness::Standard)
+}
+
+/// `open` at a given strictness.
+pub fn open_with(path: &str, level: Strictness) -> Result<Doc, Error> {
+	let text = crate::read_text(path)?;
+	let f = format_of(&text);
+	if f > FORMAT_MAJOR {
+		return Err(too_new(f).path(path));
+	}
+	parse_with(&text, level).map_err(|e| e.path(path))
+}
+
+/// The format a file's Format line names, or 0 with none.
+pub fn format_of(text: &str) -> u32 {
+	shcl::format_version(text).unwrap_or(0)
+}
+
+/// Converts a file written for an older format. With `from` 0 the file's
+/// Format line decides, and a file with none is taken as current. Pass 2
+/// for a file known to be from shcl 2.x or older; it can't tell those apart
+/// by itself. A file that reads two ways is `Ambiguous`.
+pub fn upgrade(text: &str, from: u32) -> Result<Upgraded, Error> {
+	let f = format_of(text).max(from);
+	if f > FORMAT_MAJOR {
+		return Err(too_new(f));
+	}
+	let u = shcl::upgrade(text, from > 0 && from < FORMAT_MAJOR);
+	if u.ambiguous > 0 {
+		return Err(Error::new(ErrKind::Ambiguous).msg(format!("{} lines read two ways", u.ambiguous)));
+	}
+	Ok(upgraded(u))
+}
+
+/// `upgrade` on a file. When it changes the file it first copies the
+/// original beside it, and `backup` names the copy.
+pub fn upgrade_file(path: &str, from: u32) -> Result<Upgraded, Error> {
+	if from > FORMAT_MAJOR {
+		return Err(too_new(from).path(path));
+	}
+	shcl::upgrade_file(path, from > 0 && from < FORMAT_MAJOR)
+		.map(upgraded)
+		.map_err(|e| {
+			let kind = match &e {
+				shcl::UpgradeError::NotFound(_) => ErrKind::NotFound,
+				shcl::UpgradeError::Ambiguous { .. } => ErrKind::Ambiguous,
+				shcl::UpgradeError::BackupTaken(_) => ErrKind::BackupTaken,
+				shcl::UpgradeError::Io(_) => ErrKind::Io,
+			};
+			Error::new(kind).path(path).msg(e.to_string())
+		})
+}
+
+fn upgraded(u: shcl::Upgrade) -> Upgraded {
+	Upgraded {
+		text: u.text,
+		from: u.format,
+		changed: !u.current,
+		unsure: u.lost,
+		backup: u.backup,
+	}
+}
+
+impl Doc {
+	/// The shcl document underneath, for calls shclw doesn't cover.
+	pub fn inner(&self) -> &shcl::Document {
+		&self.d
+	}
+
+	/// The shcl document underneath, to change it with calls shclw doesn't
+	/// cover.
+	pub fn inner_mut(&mut self) -> &mut shcl::Document {
+		&mut self.d
+	}
+
+	fn set_err(path: &str, st: shcl::SetStatus) -> Result<(), Error> {
+		use shcl::SetStatus as S;
+		let kind = match st {
+			S::Ok => return Ok(()),
+			S::BadPath
+			| S::ValueInPath
+			| S::Wildcard
+			| S::NoSuchIndex
+			| S::TooDeep
+			| S::Multiple
+			| S::UnderArray
+			| S::HasChildren
+			| S::RawBlock => ErrKind::BadPath,
+			S::NotFinite
+			| S::BadDateTime
+			| S::BadRawInfo
+			| S::BadRawBody
+			| S::BadComment
+			| S::NotOneValue
+			| S::NotUtf8
+			| S::OutOfRange
+			| S::NoReadBack => ErrKind::BadValue,
+		};
+		Err(Error::new(kind).path(path).msg(format!("{st:?}")))
+	}
+}
+
+impl ShclDoc for Doc {
+	fn text(&self) -> String {
+		match self.d.to_text_keep_lines() {
+			(t, true) => t,
+			(_, false) => self.d.to_canonical(),
+		}
+	}
+
+	fn canonical(&self) -> String {
+		self.d.to_canonical()
+	}
+
+	fn write(&self, path: &str) -> Result<(), Error> {
+		match self.d.save_file_keep_lines(path) {
+			Ok(_) => Ok(()),
+			Err(shcl::SaveError::Refused { lost, .. }) => Err(Error::new(ErrKind::Refused)
+				.path(path)
+				.msg(format!("{lost} lines would be lost"))),
+			Err(shcl::SaveError::Io(w)) => {
+				let kind = if w.status == shcl::WriteStatus::NotFound {
+					ErrKind::NotFound
+				} else {
+					ErrKind::Io
+				};
+				Err(Error::new(kind).path(path).msg(w.message))
+			}
+		}
+	}
+
+	fn diags(&self) -> Vec<Diag> {
+		diags(self.d.diagnostics())
+	}
+
+	fn errors(&self) -> usize {
+		self.d.error_count()
+	}
+
+	fn check(&self, schema: &Doc) -> Vec<Diag> {
+		diags(&self.d.validate(&schema.d))
+	}
+
+	fn drop_declared(&self, ds: Vec<Diag>) -> Vec<Diag> {
+		let mut v = undiags(&ds);
+		shcl::suppress_declared_repeats(&self.d, &mut v);
+		shcl::suppress_declared_reopens(&self.d, &mut v);
+		diags(&v)
+	}
+
+	fn int(&self, path: &str, fallback: i64) -> i64 {
+		self.d.get_int_or(path, fallback)
+	}
+
+	fn float(&self, path: &str, fallback: f64) -> f64 {
+		self.d.get_float_or(path, fallback)
+	}
+
+	fn bool(&self, path: &str, fallback: bool) -> bool {
+		self.d.get_bool_or(path, fallback)
+	}
+
+	fn str(&self, path: &str, fallback: &str) -> String {
+		self.d.get_string_or(path, fallback.to_owned())
+	}
+
+	fn strs(&self, path: &str, fallback: &[&str]) -> Vec<String> {
+		self.d
+			.get_string_array_or(path, fallback.iter().map(|s| (*s).to_owned()).collect())
+	}
+
+	fn ints(&self, path: &str, fallback: &[i64]) -> Vec<i64> {
+		self.d.get_int_array_or(path, fallback.to_vec())
+	}
+
+	fn floats(&self, path: &str, fallback: &[f64]) -> Vec<f64> {
+		self.d.get_float_array_or(path, fallback.to_vec())
+	}
+
+	fn raw(&self, path: &str, fallback: &str) -> String {
+		self.d.get_raw_or(path, fallback.to_owned())
+	}
+
+	fn get_int(&self, path: &str) -> Got<i64> {
+		got(self.d.read_int(path))
+	}
+
+	fn get_float(&self, path: &str) -> Got<f64> {
+		got(self.d.read_float(path))
+	}
+
+	fn get_bool(&self, path: &str) -> Got<bool> {
+		got(self.d.read_bool(path))
+	}
+
+	fn get_str(&self, path: &str) -> Got<String> {
+		got(self.d.read_string(path))
+	}
+
+	fn get_strs(&self, path: &str) -> Got<Vec<String>> {
+		got(self.d.read_string_array(path))
+	}
+
+	fn get_ints(&self, path: &str) -> Got<Vec<i64>> {
+		got(self.d.read_int_array(path))
+	}
+
+	fn get_floats(&self, path: &str) -> Got<Vec<f64>> {
+		got(self.d.read_float_array(path))
+	}
+
+	fn get_raw(&self, path: &str) -> Got<String> {
+		got(self.d.read_raw(path))
+	}
+
+	fn has(&self, path: &str) -> bool {
+		self.d.exists(path)
+	}
+
+	fn count(&self, path: &str) -> usize {
+		self.d.count(path)
+	}
+
+	fn names(&self, path: &str) -> Vec<String> {
+		crate::dedupe_names(self.d.children(path))
+	}
+
+	fn each(&self, path: &str) -> Vec<Node> {
+		let n = self.d.count(path);
+		let vals = self.d.instances(path);
+		(0..n)
+			.map(|i| {
+				let p = if n > 1 { format!("{path}({i})") } else { path.to_owned() };
+				let value = vals.get(i).cloned().unwrap_or_default();
+				let line = self.d.line(&p);
+				Node { path: p, value, line }
+			})
+			.collect()
+	}
+
+	fn line(&self, path: &str) -> usize {
+		self.d.line(path)
+	}
+
+	fn child(&self, base: &str, name: &str) -> String {
+		if base.is_empty() {
+			return shcl::quote_segment(name);
+		}
+		format!("{base}.{}", shcl::quote_segment(name))
+	}
+
+	fn put(&mut self, path: &str, v: impl Into<Value>) -> Result<(), Error> {
+		let v = v.into();
+		let st = match &v {
+			Value::Int(x) => self.d.set_int(path, *x),
+			Value::Float(x) => self.d.set_float(path, *x),
+			Value::Bool(x) => self.d.set_bool(path, *x),
+			Value::Str(x) => self.d.set_string(path, x),
+			Value::Strs(x) => {
+				let refs: Vec<&str> = x.iter().map(String::as_str).collect();
+				self.d.set_string_array(path, &refs)
+			}
+			Value::Ints(x) => self.d.set_int_array(path, x),
+			Value::Floats(x) => self.d.set_float_array(path, x),
+		};
+		Doc::set_err(path, st)?;
+		crate::verify_put(self, path, &v)
+	}
+
+	fn put_syntax(&mut self, path: &str, text: &str) -> Result<(), Error> {
+		Doc::set_err(path, self.d.set_literal(path, text))
+	}
+
+	fn comment(&mut self, path: &str, text: &str) -> Result<(), Error> {
+		Doc::set_err(path, self.d.set_comment(path, text))
+	}
+
+	fn remove(&mut self, path: &str) -> usize {
+		self.d.remove(path)
+	}
+}
+
+fn too_new(f: u32) -> Error {
+	Error::new(ErrKind::TooNew).msg(format!(
+		"format {f}, and shcl {SHCL_VERSION} reads up to {FORMAT_MAJOR}"
+	))
+}
+
+fn strictness(s: Strictness) -> shcl::Strictness {
+	match s {
+		Strictness::Loose => shcl::Strictness::Loose,
+		Strictness::Standard => shcl::Strictness::Standard,
+		Strictness::Strict => shcl::Strictness::Strict,
+	}
+}
+
+fn status(s: shcl::Status) -> Status {
+	match s {
+		shcl::Status::Good => Status::Good,
+		shcl::Status::Empty => Status::Empty,
+		shcl::Status::NotFound => Status::NotFound,
+		shcl::Status::BadType => Status::BadType,
+		shcl::Status::Multiple => Status::Multiple,
+		shcl::Status::BadPath => Status::BadPath,
+	}
+}
+
+fn got<T>(r: shcl::Read<T>) -> Got<T> {
+	Got {
+		value: r.value,
+		status: status(r.status),
+		line: r.line,
+		text: r.raw.unwrap_or_default(),
+	}
+}
+
+fn diags(v: &[shcl::Diagnostic]) -> Vec<Diag> {
+	v.iter()
+		.map(|d| Diag {
+			line: d.line,
+			severity: match d.severity {
+				shcl::Severity::Error => Severity::Error,
+				shcl::Severity::Hint => Severity::Hint,
+			},
+			code: d.code,
+			message: d.message.clone(),
+		})
+		.collect()
+}
+
+fn undiags(v: &[Diag]) -> Vec<shcl::Diagnostic> {
+	v.iter()
+		.map(|d| shcl::Diagnostic {
+			line: d.line,
+			severity: match d.severity {
+				Severity::Error => shcl::Severity::Error,
+				Severity::Hint => shcl::Severity::Hint,
+			},
+			code: d.code,
+			message: d.message.clone(),
+		})
+		.collect()
+}

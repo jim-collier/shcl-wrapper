@@ -1,0 +1,9 @@
+put	str	t	tab\there
+put	str	b	back\\slash
+put	str	u	café →
+get	str	t
+get	str	b
+get	str	u
+text
+nosuchop
+get	date	a

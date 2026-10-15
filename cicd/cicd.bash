@@ -1,0 +1,207 @@
+#!/usr/bin/env bash
+
+#  shellcheck disable=1091  ## 'source is valid here, but shellcheck doesn't know the path to it.'
+#  shellcheck disable=2154  ## 'referenced but not assigned.' False hit on trap strings that assign the var they use (rc=$?).
+
+##	- Purpose: Local CI/CD pipeline for the shcl wrappers.
+##	- Stages (fail-fast, any error aborts before the next stage):
+##	   0. remote sync (fast-forward from upstream before anything is built)
+##	   1. format (in place; check-only under --gate)
+##	   2. lint (go vet, staticcheck, clippy, shellcheck, ruff)
+##	   3. tests (shared cases against every shcl version, in every language)
+##	   4. fuzz (Go against Rust from generated cases, plus Go's own fuzzer)
+##	- Syntax:
+##	  cicd/cicd.bash [options]
+##	  Options:
+##	   --gate          format check, lint, and tests only; what the pre-push hook runs
+##	   --quick         a short fuzz stage
+##	   -q, --quiet     no preflight block and no prompt
+##	   -y, --yes       no prompt
+##	   --no-sync       skip the remote sync stage
+##	   --no-fuzz       skip the fuzz stage
+##	   -h, --help      show this help
+##	- Fuzz budgets, in seconds: SHCLW_FUZZ_SECONDS (default 60, 10 with --quick)
+##	  for Go against Rust, and SHCLW_GOFUZZ_SECONDS (default 30, 0 with --quick)
+##	  for Go's fuzzer. Failing fuzz cases go to cicd/artifacts/fuzz/.
+##	- Test scratch goes under $TMPDIR, in a folder the run makes and removes.
+
+##	History: At bottom of script.
+
+##	Copyright © 2026 Jim Collier [ID: 2უNაɘ«҂թȹɤξπ๙¿ձϖ]
+##	Licensed under The MIT License (MIT). Full text at:
+##		https://mit-license.org/
+##	SPDX-License-Identifier: MIT
+
+
+set -Eeuo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "${here}/.." && pwd)"
+source "${here}/tool-pins.env"
+source "${here}/utility/include/gfs-rotate.bash"
+stamp="$(date +%Y%m%d-%H%M%S)"
+
+## rustup has to win over any system rust, or rust-toolchain.toml means nothing.
+export PATH="${HOME}/.cargo/bin:${PATH}"
+
+## Half the cores, since a workstation is usually running something else.
+cpuCap=$(( $(nproc 2>/dev/null || echo 2) / 2 )); if ((cpuCap < 1)); then cpuCap=1; fi
+
+doGate=0; doQuick=0; doQuiet=0; assumeYes=0; doSync=1; doFuzz=1
+while (($#)); do case "$1" in
+	--gate)     doGate=1; doFuzz=0; shift ;;
+	--quick)    doQuick=1; shift ;;
+	-q|--quiet) doQuiet=1; assumeYes=1; shift ;;
+	-y|--yes)   assumeYes=1; shift ;;
+	--no-sync)  doSync=0; shift ;;
+	--no-fuzz)  doFuzz=0; shift ;;
+	-h|--help)  sed -n '/^##	- Purpose:/,/^##	History:/p' "${BASH_SOURCE[0]}" | sed '$d; s/^##	\{0,1\}//'; exit 0 ;;
+	*) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
+esac; done
+
+fuzzSecs="${SHCLW_FUZZ_SECONDS:-$( ((doQuick)) && echo 10 || echo 60)}"
+goFuzzSecs="${SHCLW_GOFUZZ_SECONDS:-$( ((doQuick)) && echo 0 || echo 30)}"
+[[ "${fuzzSecs}" =~ ^[0-9]+$ ]]   || { echo "SHCLW_FUZZ_SECONDS is not a count" >&2; exit 2; }
+[[ "${goFuzzSecs}" =~ ^[0-9]+$ ]] || { echo "SHCLW_GOFUZZ_SECONDS is not a count" >&2; exit 2; }
+
+## Output helpers: fEcho / fEcho_Clean, blank-collapsing.
+declare -i _wasLastEchoBlank=0
+fEcho_ResetBlankCounter(){ _wasLastEchoBlank=0; }
+fEcho_Clean(){ if [[ -n "${1:-}" ]]; then echo -e "$*"; _wasLastEchoBlank=0; elif [[ "${_wasLastEchoBlank}" == 0 ]] && echo; then _wasLastEchoBlank=1; fi; }
+fEcho(){       if [[ -n "$*"     ]]; then fEcho_Clean "[ $* ]"; else fEcho_Clean ""; fi; }
+fEcho_Force(){ fEcho_ResetBlankCounter; fEcho "$*"; }
+_letterbox="••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••"
+fSection(){ fEcho_Clean; fEcho_Clean "${_letterbox}"; fEcho "$*"; }
+fDie(){ { fEcho_Force "FAILED: $*"; echo; } >&2; exit 1; }
+trap 'rc=$?; printf "\n[ CICD ABORTED (exit %s) at line %s: %s ]\n\n" "$rc" "$LINENO" "$BASH_COMMAND" >&2; exit $rc' ERR
+
+## Warns when a tool on this box isn't the pinned version.
+fCheckPin(){   ## fCheckPin NAME PINNED ACTUAL
+	if [[ "$3" != *"$2"* ]]; then fEcho "WARNING: $1 is '${3}', pinned ${2} in cicd/tool-pins.env"; fi
+	return 0
+}
+
+## The run's scratch folder, with a marker so cleanup only ever removes its own.
+work="${TMPDIR:-/tmp}/test_shclw_${stamp}$(printf '%02d' $((RANDOM % 100)))"
+fCleanup(){
+	if [[ -f "${work}/.shclw-cicd-owned" ]]; then rm -rf -- "${work}"; fi
+	return 0
+}
+trap fCleanup EXIT
+
+## Tee the whole run to a rotated log, for cicd/utility/lint-report.bash.
+logDir="${root}/cicd/artifacts/lint"
+mkdir -p "${logDir}"
+exec > >(tee "${logDir}/run_${stamp}.log") 2>&1
+gfs_rotate "${logDir}" run log >/dev/null 2>&1 || true
+
+if ((! doQuiet)); then
+	fEcho_Clean
+	fEcho_Clean "shcl-wrapper local CI/CD"
+	fEcho_Clean
+	fEcho_Clean "Repo root ....: ${root}"
+	fEcho_Clean "Mode .........: $( ((doGate)) && echo 'gate (format check, lint, tests)' || echo 'full')"
+	fEcho_Clean "Remote sync ..: $( ((doSync)) && echo 'fast-forward when behind; abort when diverged' || echo '(skipped)')"
+	fEcho_Clean "Fuzz .........: $( ((doFuzz)) && echo "${fuzzSecs}s Go against Rust, ${goFuzzSecs}s Go fuzzer" || echo '(skipped)')"
+	fEcho_Clean "CPU cap ......: ${cpuCap}"
+	fEcho_Clean "Scratch ......: ${work}"
+	if ((! assumeYes)); then read -r -p "Proceed? (Ctrl+C aborts, Enter continues) " _; fi
+fi
+mkdir -p "${work}" && touch "${work}/.shclw-cicd-owned"
+
+#•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
+if ((doSync)); then
+	fSection "0/4  Remote sync"
+	branch="$(git -C "${root}" symbolic-ref --quiet --short HEAD || true)"
+	upstream="$(git -C "${root}" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+	if [[ -z "${branch}" ]]; then
+		fEcho "WARNING: detached HEAD; nothing to sync"
+	elif [[ -z "${upstream}" ]]; then
+		fEcho "WARNING: ${branch} tracks no upstream; nothing to sync"
+	elif ! git -C "${root}" fetch --quiet 2>/dev/null; then
+		fEcho "WARNING: fetch failed (offline?); continuing against the local tree"
+	else
+		read -r ahead behind < <(git -C "${root}" rev-list --left-right --count "HEAD...${upstream}")
+		if   ((ahead && behind)); then fDie "${branch} and ${upstream} have diverged (${ahead} local, ${behind} remote); reconcile by hand"
+		elif ((behind)); then
+			## Stash-wrapped, since a fast-forward refuses to touch a modified file.
+			dirty=0
+			if ! git -C "${root}" diff --quiet || ! git -C "${root}" diff --cached --quiet; then dirty=1; fi
+			if [[ -n "$(git -C "${root}" ls-files --others --exclude-standard || true)" ]]; then dirty=1; fi
+			if ((dirty)); then git -C "${root}" stash push --quiet --include-untracked --message "cicd sync ${stamp}"; fi
+			ff=0; if git -C "${root}" merge --ff-only --quiet "${upstream}"; then ff=1; fi
+			if ((dirty)) && ! git -C "${root}" stash pop --quiet; then
+				fDie "the local changes conflict with ${upstream}; they are safe in the stash - resolve, then 'git stash drop'"
+			fi
+			((ff)) || fDie "fast-forward from ${upstream} failed"
+			fEcho "OK: fast-forwarded ${behind} commit(s) from ${upstream}"
+		elif ((ahead)); then fEcho "OK: ${ahead} commit(s) ahead of ${upstream}, nothing to take"
+		else                 fEcho "OK: level with ${upstream}"
+		fi
+	fi
+fi
+
+#•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
+fSection "1/4  Format"
+if ((doGate)); then
+	unformatted="$(cd "${root}/source/go" && gofmt -l .)"
+	[[ -z "${unformatted}" ]] || fDie "gofmt would change: ${unformatted}"
+	(cd "${root}/source/rust" && cargo fmt --check) || fDie "cargo fmt would change files"
+	fEcho "OK: formatted"
+else
+	(cd "${root}/source/go" && gofmt -w .)
+	(cd "${root}/source/rust" && cargo fmt)
+	fEcho "OK: gofmt and cargo fmt applied"
+fi
+
+#•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
+fSection "2/4  Lint"
+fCheckPin go           "${PIN_GO}"          "$(go version)"
+fCheckPin staticcheck  "${PIN_STATICCHECK}" "$(staticcheck --version 2>/dev/null || echo missing)"
+fCheckPin shellcheck   "${PIN_SHELLCHECK}"  "$(shellcheck --version 2>/dev/null | sed -n 2p || echo missing)"
+fCheckPin ruff         "${PIN_RUFF}"        "$(ruff --version 2>/dev/null || echo missing)"
+(cd "${root}/source/go" && go vet ./... && staticcheck ./...)
+fEcho "OK: go vet, staticcheck"
+(cd "${root}/source/rust" && cargo clippy --quiet -j "${cpuCap}" --all-features --all-targets -- -D warnings -W clippy::pedantic)
+fEcho "OK: clippy"
+mapfile -t shellFiles < <(find "${root}/cicd" -type f \( -name '*.bash' -o -path '*/hooks/*' \) | sort)
+((${#shellFiles[@]})) || fDie "shellcheck found no files"
+shellcheck "${shellFiles[@]}"
+fEcho "OK: shellcheck (${#shellFiles[@]} files)"
+ruff check --quiet "${root}/cicd"
+ruff format --check --quiet "${root}/cicd"
+fEcho "OK: ruff"
+
+#•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
+fSection "3/4  Tests"
+(cd "${root}/source/go" && TMPDIR="${work}" go test -p "${cpuCap}" ./...)
+fEcho "OK: Go tests"
+(cd "${root}/source/rust" && TMPDIR="${work}" cargo test --quiet -j "${cpuCap}" --all-features)
+fEcho "OK: Rust tests"
+
+#•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
+if ((doFuzz)); then
+	fSection "4/4  Fuzz"
+	mkdir -p "${work}/bin"
+	(cd "${root}/source/go" && go build -o "${work}/bin/go-drive" ./cmd/shclw-drive)
+	(cd "${root}/source/rust" && cargo build --quiet -j "${cpuCap}" --release --all-features --bin shclw-drive)
+	cp "${root}/source/rust/target/release/shclw-drive" "${work}/bin/rust-drive"
+	failDir="${root}/cicd/artifacts/fuzz/${stamp}"
+	if ((fuzzSecs > 0)); then
+		python3 "${here}/fuzz.py" --go "${work}/bin/go-drive" --rust "${work}/bin/rust-drive" --seconds "${fuzzSecs}" \
+			--cases "${root}/tests/cases" --work "${work}/fuzz" --out "${failDir}" || fDie "fuzz found failures; cases are in ${failDir}"
+	fi
+	if ((goFuzzSecs > 0)); then
+		(cd "${root}/source/go" && TMPDIR="${work}" go test ./shclw/ -run '^$' -fuzz=FuzzRun -fuzztime="${goFuzzSecs}s" -parallel "${cpuCap}")
+	fi
+	fEcho "OK: fuzz"
+fi
+
+fEcho_Clean
+fEcho_Clean "${_letterbox}"
+fEcho "shcl-wrapper CI/CD: done."
+fEcho_Clean
+
+
+##	History:
+##		- 2026-10-15 JC: Created. Format, lint, shared cases, and Go-against-Rust fuzz for the Go and Rust wrappers.

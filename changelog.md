@@ -16,14 +16,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Other work
 -->
 
-## v1.0.0-beta1
-
-### Notes
+## Unreleased
 
 ### Added
 
-### Changed
+- Go and Rust wrappers over shcl 1.2, 2.0, and 3.0, with one API across all of them.
 
-### Removed
+- Ops scripts, a text form of reads and edits, through `shclw.Run` and `shclw::run`.
 
-### Other work
+- A pipeline with shared test cases for both languages, and fuzzing of Go against Rust.

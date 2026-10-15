@@ -5,55 +5,18 @@
 <!-- markdownlint-disable MD041 -- First line in a file should be a top-level heading -->
 <div align="center">
 
-[![License: GPL v2+](https://img.shields.io/badge/License-GPLv2%2B-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.html)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 ![Lifecycle: Alpha](https://img.shields.io/badge/Lifecycle-Alpha-orange)
 ![Support](https://img.shields.io/badge/Support-Maintained-brightgreen)
-![Status: Passing](https://img.shields.io/badge/Status-Passing-brightgreen)
+![Go](https://img.shields.io/badge/Go-00ADD8?logo=go&logoColor=white)
+[![made-with-rust](https://img.shields.io/badge/Made%20with-Rust-1f425f.svg)](https://www.rust-lang.org/)
 
 </div>
-<!--
-[![!#/bin/bash](https://img.shields.io/badge/-%23!%2Fbin%2Fbash-1f425f.svg?logo=gnu-bash)](https://www.gnu.org/software/bash/)
-[![made-with-python](https://img.shields.io/badge/Made%20with-Python-1f425f.svg)](https://www.python.org/)
-[![made-with-rust](https://img.shields.io/badge/Made%20with-Rust-1f425f.svg)](https://www.rust-lang.org/)
-![Go](https://img.shields.io/badge/Go-00ADD8?logo=go&logoColor=white)
-![Made with](https://img.shields.io/badge/Made%20with-C%2B%2B-brightgreen?style=plastic)
-![Made with](https://img.shields.io/badge/Made%20with-Unreal%20Engine-critical?style=plastic)
-[![made-with-javascript](https://img.shields.io/badge/Made%20with-JavaScript-1f425f.svg)](https://www.javascript.com)
-![License: GPL v2](https://img.shields.io/badge/License-GPLv2-blue.svg)
-[![License: GPL v2+](https://img.shields.io/badge/License-GPLv2%2B-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.html)
-![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
-![Lifecycle: Alpha](https://img.shields.io/badge/Lifecycle-Alpha-orange)
-![Lifecycle: Beta](https://img.shields.io/badge/Lifecycle-Beta-yellow)
-![Lifecycle: RC](https://img.shields.io/badge/Lifecycle-RC-blue)
-![Lifecycle: Stable](https://img.shields.io/badge/Lifecycle-Stable-brightgreen)
-![Lifecycle: Deprecated](https://img.shields.io/badge/Lifecycle-Deprecated-red)
-![Status: Deprecated](https://img.shields.io/badge/Status-Deprecated-orange)
-![Status: Archived](https://img.shields.io/badge/Status-Archived-lightgrey)
-![Lifecycle: EOL](https://img.shields.io/badge/Lifecycle-EOL-lightgrey)
-![Coverage](https://img.shields.io/badge/Coverage-25%25-red)
-![Coverage](https://img.shields.io/badge/Coverage-50%25-orange)
-![Coverage](https://img.shields.io/badge/Coverage-75%25-yellow)
-![Coverage](https://img.shields.io/badge/Coverage-90%25-brightgreen)
-![Status: Passing](https://img.shields.io/badge/Status-Passing-brightgreen)
-![Status: Failing](https://img.shields.io/badge/Status-Failing-red)
-[![GitHub Sponsors](https://img.shields.io/github/sponsors/jim-collier?logo=GitHub%20Sponsors&style=social)](https://github.com/sponsors/jim-collier)
--->
 
 <!-- TOC ignore:true -->
 # shcl-wrapper
 
-<table style="border: none; border-collapse: collapse;">
-	<tr style="border: none; border-collapse: collapse;">
-		<td style="border: none; border-collapse: collapse;"><img src="assets/logo.png" alt="Logo" width="320"/></td>
-		<td style="border: none;">This is a thing.</td>
-	</tr>
-</table>
-
-<p align="center"><img src="assets/logo.png" alt="" width="128"></p>
-
-This is a thing.
+One small, steady API over every version of [shcl](https://github.com/yottacore/shcl), in each language that uses it.
 
 <!-- TOC ignore:true -->
 ## Table of contents
@@ -62,46 +25,106 @@ This is a thing.
 
 - [Why](#why)
 - [Features](#features)
-- [Installing](#installing)
+- [Using it](#using-it)
+	- [Go](#go)
+	- [Rust](#rust)
 - [Building from source](#building-from-source)
+- [Support](#support)
 - [Copyright and license](#copyright-and-license)
 
 <!-- /TOC -->
 
 ## Why
 
+shcl is moving fast. 1.2, 2.0, and 3.0 came out within a few months of each other, 3.0 changes the file format a little, and 4 is set to change the API a lot. A program that calls shcl directly has to follow every one of those changes, and each program ends up with its own fixes for the same quirks.
+
+This wraps the basics, loading, reading, walking, writing, saving, and upgrading, in one API that stays put. A program picks its shcl version in one place. When shcl changes, the wrapper changes, once, with tests, and every program using it gets the fix.
+
+If your program uses one shcl version and doesn't plan to move, you don't need this. Call shcl directly. And if it leans on shcl's deeper features, like line-keeping merges or schema generation, the wrapper won't cover those. It only gets out of the way, with `Inner()`.
+
 ## Features
 
-## Installing
+- The same calls in Go and Rust, over shcl 1.2, 2.0, and 3.0.
+
+- Reads with a fallback, `doc.Int("server.port", 8080)`, or with a status when the reason matters.
+
+- Walking repeated entries without writing selector syntax, which changed between versions.
+
+- Every write is read back, so a value shcl accepted but stored differently is reported instead of saved.
+
+- A file written for a newer format is refused with a clear error, rather than read wrong.
+
+- Format upgrades with a backup of the original, where the shcl underneath can do one.
+
+- A text script of edits and reads, which is also what the tests run in every language, so Go and Rust can't drift apart.
+
+## Using it
+
+### Go
+
+~~~bash
+go get github.com/jim-collier/shcl-wrapper/source/go@dev
+~~~
+
+~~~go
+import shclw "github.com/jim-collier/shcl-wrapper/source/go/shclw3"
+
+doc, err := shclw.Open("app.shcl")
+if err != nil && shclw.KindOf(err) != shclw.ErrNotFound {
+	return err
+}
+port := doc.Int("server.port", 8080)
+for _, t := range doc.Each("table") {
+	fmt.Println(doc.Str(doc.Child(t.Path, "name"), ""))
+}
+if err := doc.Put("server.port", 9090); err != nil {
+	return err
+}
+return doc.Write("app.shcl")
+~~~
+
+`shclw1`, `shclw2`, and `shclw3` match shcl 1.2, 2.0, and 3.0. Moving to another version is the import line.
+
+### Rust
+
+~~~toml
+[dependencies]
+shclw = { git = "https://github.com/jim-collier/shcl-wrapper", branch = "dev", features = ["shcl3"] }
+~~~
+
+~~~rust
+use shclw::ShclDoc;
+
+let mut doc = shclw::v3::open("app.shcl")?;
+let port = doc.int("server.port", 8080);
+for t in doc.each("table") {
+	println!("{}", doc.str(&doc.child(&t.path, "name"), ""));
+}
+doc.put("server.port", 9090)?;
+doc.write("app.shcl")?;
+~~~
+
+The features `shcl1`, `shcl2`, and `shcl3` turn on the modules `v1`, `v2`, and `v3`.
+
+The full list of calls, and what the wrapper does differently from each shcl version, is in [design.md](project/design.md).
 
 ## Building from source
+
+Go 1.21 or newer, and Rust 1.88 or newer. The pipeline pins Rust 1.96 in `source/rust/rust-toolchain.toml`.
+
+~~~bash
+cicd/cicd.bash           # format, lint, tests, and fuzzing
+cicd/cicd.bash --gate    # the same without fuzzing, as the pre-push hook runs it
+~~~
+
+## Support
+
+If it saves you some time, you can say thanks through [GitHub Sponsors](https://github.com/sponsors/jim-collier) or [Ko-fi](https://ko-fi.com/jimcollier).
 
 ## Copyright and license
 
 > Copyright © 2026 Jim Collier [ID: 2უNაɘ«҂թȹɤξπ๙¿ձϖ]<br />
-> Licensed under the [GNU General Public License v2.0 or later](https://spdx.org/licenses/GPL-2.0-or-later.html)<br />
-> SPDX-License-Identifier: `GPL-2.0-or-later` <br />
+> Licensed under the [MIT License](https://mit-license.org/)<br />
+> SPDX-License-Identifier: `MIT`<br />
 > No warranty.<br />
 > shcl-wrapper™ is a [trademark](trademark.md) of Jim Collier.
-<!--
-> Licensed under the [MIT License](https://mit-license.org/)<br />
-> SPDX-License-Identifier: `MIT`.<br />
-	- Most permissive and least protective
-
-> Licensed under the [GNU General Public License v2.0](https://www.gnu.org/licenses/gpl-2.0.html).
-
-> Licensed under the [GNU General Public License v2.0 or later](https://spdx.org/licenses/GPL-2.0-or-later.html).
-> SPDX-License-Identifier: `GPL-2.0-or-later`<br />
-
-> Licensed under the [GNU General Public License v3](https://www.gnu.org/licenses/gpl-3.0.en.html) license.
-
-> Licensed under the [Mozilla Public License 2.0](https://mozilla.org/MPL/2.0/).
-
-> Licensed under the [Apache 2.0 License](https://www.apache.org/licenses/LICENSE-2.0.html)
-> SPDX-License-Identifier: `Apache-2.0`<br />
-	- Permissive
-	- Patent protection clause
-	- Requires attribution
-	- No contribute back
-	- SaaS loophole
--->

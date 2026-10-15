@@ -1,0 +1,466 @@
+// Copyright © 2026 Jim Collier [ID: 2უNაɘ«҂թȹɤξπ๙¿ձϖ]
+// SPDX-License-Identifier: MIT
+
+package shclw
+
+import (
+	"fmt"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"unicode/utf8"
+)
+
+// RunOptions says what Run may touch outside the document.
+type RunOptions struct {
+	// Dir is where `check` reads schema files and `write` writes. Empty
+	// turns both ops off.
+	Dir string
+}
+
+// Run parses input with lib, applies a script of ops to it, and returns
+// what the ops printed. The script and its output are the same in every
+// wrapper language, which is what the cross-language tests compare. The
+// ops are listed in project/design.md under "Ops scripts".
+func Run(lib Lib, input, script string, opt RunOptions) string {
+	r := runner{lib: lib, input: input, opt: opt, doc: lib.Parse(input)}
+	for _, line := range strings.Split(script, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		r.out("> " + line)
+		r.op(splitFields(line))
+	}
+	return r.b.String()
+}
+
+type runner struct {
+	lib   Lib
+	input string
+	opt   RunOptions
+	doc   Doc
+	b     strings.Builder
+}
+
+func (r *runner) out(s string) {
+	r.b.WriteString(s)
+	r.b.WriteByte('\n')
+}
+
+func (r *runner) op(f []string) {
+	arg := func(i int) string {
+		if i < len(f) {
+			return f[i]
+		}
+		return ""
+	}
+	rest := func(i int) []string {
+		if i < len(f) {
+			return f[i:]
+		}
+		return []string{}
+	}
+	d := r.doc
+	switch f[0] {
+	case "parse":
+		r.parse(arg(1))
+	case "text":
+		r.block(d.Text())
+	case "canonical":
+		r.block(d.Canonical())
+	case "diags":
+		r.diags(d.Diags())
+	case "errors":
+		r.out(strconv.Itoa(d.Errors()))
+	case "get":
+		r.out(r.get(arg(1), arg(2)))
+	case "or":
+		r.or(arg(1), arg(2), rest(3))
+	case "has":
+		r.out(strconv.FormatBool(d.Has(arg(1))))
+	case "count":
+		r.out(strconv.Itoa(d.Count(arg(1))))
+	case "line":
+		r.out(strconv.Itoa(d.Line(arg(1))))
+	case "names":
+		r.out(joinEsc(d.Names(arg(1))))
+	case "each":
+		for i, n := range d.Each(arg(1)) {
+			r.out(fmt.Sprintf("%d\t%d\t%s", i, n.Line, esc(n.Value)))
+		}
+	case "eachget":
+		for i, n := range d.Each(arg(2)) {
+			r.out(strconv.Itoa(i) + "\t" + r.get(arg(1), d.Child(n.Path, arg(3))))
+		}
+	case "put":
+		v, ok := parseValue(arg(1), rest(3))
+		if !ok {
+			r.out("error badvalue")
+			return
+		}
+		r.result(d.Put(arg(2), v))
+	case "syntax":
+		r.result(d.PutSyntax(arg(1), arg(2)))
+	case "comment":
+		r.result(d.Comment(arg(1), arg(2)))
+	case "remove":
+		r.out(strconv.Itoa(d.Remove(arg(1))))
+	case "check":
+		r.check(arg(1), arg(2))
+	case "format":
+		r.out(strconv.Itoa(r.lib.FormatOf(r.input)))
+	case "upgrade":
+		r.upgrade(arg(1))
+	case "write":
+		r.write(arg(1))
+	default:
+		r.out("error unknownop")
+	}
+}
+
+func (r *runner) parse(level string) {
+	s := Standard
+	switch level {
+	case "loose":
+		s = Loose
+	case "strict":
+		s = Strict
+	}
+	doc, err := r.lib.ParseWith(r.input, s)
+	r.doc = doc
+	r.result(err)
+}
+
+func (r *runner) result(err error) {
+	if err == nil {
+		r.out("ok")
+		return
+	}
+	r.out("error " + KindOf(err).String())
+}
+
+func (r *runner) diags(ds []Diag) {
+	for _, d := range ds {
+		r.out(fmt.Sprintf("%d\t%s\t%s\t%s", d.Line, d.Severity, d.Code, esc(d.Message)))
+	}
+}
+
+// block prints multi-line text one line per output line, so a golden file
+// diff shows which line changed.
+func (r *runner) block(text string) {
+	lines := strings.Split(text, "\n")
+	last := len(lines) - 1
+	if lines[last] == "" {
+		lines = lines[:last]
+	}
+	for _, l := range lines {
+		r.out("| " + esc(l))
+	}
+	if !strings.HasSuffix(text, "\n") && text != "" {
+		r.out("(no newline at end)")
+	}
+}
+
+func (r *runner) get(typ, path string) string {
+	d := r.doc
+	head := func(s Status, line int) string { return s.String() + "\t" + strconv.Itoa(line) }
+	switch typ {
+	case "int":
+		g := d.GetInt(path)
+		return head(g.Status, g.Line) + "\t" + strconv.FormatInt(g.Value, 10)
+	case "float":
+		g := d.GetFloat(path)
+		return head(g.Status, g.Line) + "\t" + FormatFloat(g.Value)
+	case "bool":
+		g := d.GetBool(path)
+		return head(g.Status, g.Line) + "\t" + strconv.FormatBool(g.Value)
+	case "str":
+		g := d.GetStr(path)
+		return head(g.Status, g.Line) + "\t" + esc(g.Value)
+	case "raw":
+		g := d.GetRaw(path)
+		return head(g.Status, g.Line) + "\t" + esc(g.Value)
+	case "strs":
+		g := d.GetStrs(path)
+		return head(g.Status, g.Line) + "\t" + counted(len(g.Value), joinEsc(g.Value))
+	case "ints":
+		g := d.GetInts(path)
+		return head(g.Status, g.Line) + "\t" + counted(len(g.Value), joinInts(g.Value))
+	case "floats":
+		g := d.GetFloats(path)
+		return head(g.Status, g.Line) + "\t" + counted(len(g.Value), joinFloats(g.Value))
+	}
+	return "error badtype"
+}
+
+func (r *runner) or(typ, path string, fallback []string) {
+	d := r.doc
+	first := ""
+	if len(fallback) > 0 {
+		first = fallback[0]
+	}
+	switch typ {
+	case "int":
+		n, err := strconv.ParseInt(first, 10, 64)
+		if err != nil {
+			r.out("error badvalue")
+			return
+		}
+		r.out(strconv.FormatInt(d.Int(path, n), 10))
+	case "float":
+		x, ok := parseFloat(first)
+		if !ok {
+			r.out("error badvalue")
+			return
+		}
+		r.out(FormatFloat(d.Float(path, x)))
+	case "bool":
+		r.out(strconv.FormatBool(d.Bool(path, first == "true")))
+	case "str":
+		r.out(esc(d.Str(path, first)))
+	case "raw":
+		r.out(esc(d.Raw(path, first)))
+	case "strs":
+		v := d.Strs(path, fallback)
+		r.out(counted(len(v), joinEsc(v)))
+	case "ints":
+		v, ok := parseValue("ints", fallback)
+		if !ok {
+			r.out("error badvalue")
+			return
+		}
+		n := d.Ints(path, v.([]int64))
+		r.out(counted(len(n), joinInts(n)))
+	case "floats":
+		v, ok := parseValue("floats", fallback)
+		if !ok {
+			r.out("error badvalue")
+			return
+		}
+		x := d.Floats(path, v.([]float64))
+		r.out(counted(len(x), joinFloats(x)))
+	default:
+		r.out("error badtype")
+	}
+}
+
+// check prints a schema check. Mode "all" adds the load's own diagnostics
+// first, and "drop" does that and then drops what the schema declares.
+func (r *runner) check(name, mode string) {
+	path, ok := r.file(name)
+	if !ok {
+		return
+	}
+	text, err := ReadText(path)
+	if err != nil {
+		r.result(err)
+		return
+	}
+	schema := r.lib.Parse(text)
+	diags := r.doc.Check(schema)
+	if mode == "all" || mode == "drop" {
+		diags = append(r.doc.Diags(), diags...)
+	}
+	if mode == "drop" {
+		diags = schema.DropDeclared(diags)
+	}
+	r.diags(diags)
+}
+
+func (r *runner) upgrade(from string) {
+	n, err := strconv.Atoi(from)
+	if from == "" {
+		n, err = 0, nil
+	}
+	if err != nil {
+		r.out("error badvalue")
+		return
+	}
+	u, err := r.lib.Upgrade(r.input, n)
+	if err != nil {
+		r.result(err)
+		return
+	}
+	r.out(fmt.Sprintf("from %d changed %t unsure %d", u.From, u.Changed, u.Unsure))
+	r.block(u.Text)
+}
+
+func (r *runner) write(name string) {
+	path, ok := r.file(name)
+	if !ok {
+		return
+	}
+	if err := r.doc.Write(path); err != nil {
+		r.result(err)
+		return
+	}
+	text, err := ReadText(path)
+	if err != nil {
+		r.result(err)
+		return
+	}
+	r.out("ok")
+	r.block(text)
+}
+
+// file keeps a script's file names inside RunOptions.Dir.
+func (r *runner) file(name string) (string, bool) {
+	if r.opt.Dir == "" || name == "" || name != filepath.Base(name) || name == ".." {
+		r.out("error unsupported")
+		return "", false
+	}
+	return filepath.Join(r.opt.Dir, name), true
+}
+
+func parseValue(typ string, f []string) (any, bool) {
+	first := ""
+	if len(f) > 0 {
+		first = f[0]
+	}
+	switch typ {
+	case "int":
+		n, err := strconv.ParseInt(first, 10, 64)
+		return n, err == nil
+	case "float":
+		return parseFloat(first)
+	case "bool":
+		return first == "true", first == "true" || first == "false"
+	case "str":
+		return first, true
+	case "strs":
+		return append([]string{}, f...), true
+	case "ints":
+		out := make([]int64, 0, len(f))
+		for _, s := range f {
+			n, err := strconv.ParseInt(s, 10, 64)
+			if err != nil {
+				return nil, false
+			}
+			out = append(out, n)
+		}
+		return out, true
+	case "floats":
+		out := make([]float64, 0, len(f))
+		for _, s := range f {
+			x, ok := parseFloat(s)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, x)
+		}
+		return out, true
+	}
+	return nil, false
+}
+
+// parseFloat takes plain decimal and exponent forms only. Each language's
+// own parser takes a different set of spellings for infinity and NaN.
+func parseFloat(s string) (float64, bool) {
+	if s == "" || strings.ContainsAny(s, "xXpP_") || strings.ContainsFunc(s, isLetterNotE) {
+		return 0, false
+	}
+	x, err := strconv.ParseFloat(s, 64)
+	return x, err == nil
+}
+
+func isLetterNotE(r rune) bool {
+	return (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z') && r != 'e' && r != 'E'
+}
+
+// splitFields splits a script line on tabs and undoes \t, \n, \r, and \\.
+func splitFields(line string) []string {
+	f := strings.Split(line, "\t")
+	for i, s := range f {
+		f[i] = unesc(s)
+	}
+	return f
+}
+
+func unesc(s string) string {
+	if !strings.Contains(s, `\`) {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' || i+1 == len(s) {
+			b.WriteByte(s[i])
+			continue
+		}
+		switch s[i+1] {
+		case 't':
+			b.WriteByte('\t')
+		case 'n':
+			b.WriteByte('\n')
+		case 'r':
+			b.WriteByte('\r')
+		case '\\':
+			b.WriteByte('\\')
+		default:
+			b.WriteByte('\\')
+			b.WriteByte(s[i+1])
+		}
+		i++
+	}
+	return b.String()
+}
+
+// esc makes a value safe for one tab-separated output field. Bytes that
+// aren't valid UTF-8 print as \xHH.
+func esc(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		c, size := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case c == utf8.RuneError && size == 1:
+			fmt.Fprintf(&b, `\x%02x`, s[i])
+		case c == '\\':
+			b.WriteString(`\\`)
+		case c == '\t':
+			b.WriteString(`\t`)
+		case c == '\n':
+			b.WriteString(`\n`)
+		case c == '\r':
+			b.WriteString(`\r`)
+		case c < 0x20 || c == 0x7f:
+			fmt.Fprintf(&b, `\x%02x`, c)
+		default:
+			b.WriteString(s[i : i+size])
+		}
+		i += size
+	}
+	return b.String()
+}
+
+// counted puts an array's length before its items, so [] and [""] print
+// differently.
+func counted(n int, items string) string {
+	if n == 0 {
+		return "0"
+	}
+	return strconv.Itoa(n) + "\t" + items
+}
+
+func joinEsc(v []string) string {
+	out := make([]string, len(v))
+	for i, s := range v {
+		out[i] = esc(s)
+	}
+	return strings.Join(out, "\t")
+}
+
+func joinInts(v []int64) string {
+	out := make([]string, len(v))
+	for i, n := range v {
+		out[i] = strconv.FormatInt(n, 10)
+	}
+	return strings.Join(out, "\t")
+}
+
+func joinFloats(v []float64) string {
+	out := make([]string, len(v))
+	for i, x := range v {
+		out[i] = FormatFloat(x)
+	}
+	return strings.Join(out, "\t")
+}

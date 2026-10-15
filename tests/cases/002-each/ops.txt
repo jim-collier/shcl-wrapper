@@ -1,0 +1,12 @@
+names
+count	table
+each	table
+eachget	str	table	field
+each	table.field
+eachget	str	table.field	type
+each	solo
+eachget	str	solo	k
+each	nope
+get	str	n
+each	n
+names	table

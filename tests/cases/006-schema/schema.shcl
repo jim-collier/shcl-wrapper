@@ -1,0 +1,6 @@
+field: port
+	type: int
+	min: 1
+field: name
+	type: string
+	repeat: 0, 10

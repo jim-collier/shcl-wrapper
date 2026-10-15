@@ -173,6 +173,8 @@ Go names are listed. Rust uses the same words in snake case, and `ShclDoc` has t
 ### Everything else
 
 - `d.Inner()` is the shcl document underneath. Code that uses it is tied to that shcl version, which is the price of reaching past the wrapper.
+	- In Go, shcl's own types are named by importing the same shcl module, which Go resolves to the version the wrapper uses.
+	- In Rust, each module has the shcl crate under it as `shcl`, such as `shclw::v3::shcl::SetStatus`.
 
 - `ShclVersion` and `FormatMajor` say what's underneath.
 

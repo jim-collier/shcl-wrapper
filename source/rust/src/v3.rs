@@ -8,7 +8,8 @@
 //! form where it can't. `write` refuses with `Refused` rather than drop a
 //! line.
 
-use shcl3 as shcl;
+/// The shcl crate underneath, so code using `inner()` can name its types.
+pub use shcl3 as shcl;
 
 use crate::{Diag, ErrKind, Error, Got, Node, Severity, ShclDoc, Status, Strictness, Upgraded, Value};
 

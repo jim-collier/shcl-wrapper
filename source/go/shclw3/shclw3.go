@@ -13,6 +13,7 @@ import (
 	"fmt"
 
 	"github.com/jim-collier/shclwrap/source/go/shclw"
+	"github.com/jim-collier/shclwrap/source/go/shclw2"
 	shcl "github.com/yottacore/shcl/source/go/v2"
 )
 
@@ -126,15 +127,20 @@ func FormatOf(text string) int {
 // Upgrade converts a file written for an older format. With from 0 the
 // file's Format line decides, and a file with none is taken as current. Pass
 // from 2 for a file known to be from shcl 2.x or older; it can't tell those
-// apart by itself. A file that reads two ways is ErrAmbiguous.
+// apart by itself. A file that reads two ways is ErrAmbiguous, and one shcl
+// 2.0 reports errors on is ErrRefused, with those errors in Diags.
 func Upgrade(text string, from int) (Upgraded, error) {
 	if f := max(FormatOf(text), from); f > FormatMajor {
 		return Upgraded{Text: text, From: f}, tooNew("", f)
 	}
-	u := shcl.Upgrade(text, from > 0 && from < FormatMajor)
+	fromV2 := from > 0 && from < FormatMajor
+	u := shcl.Upgrade(text, fromV2)
 	out := upgraded(u)
 	if u.Ambiguous > 0 {
 		return out, &shclw.Error{Kind: shclw.ErrAmbiguous, Msg: fmt.Sprintf("%d lines read two ways", u.Ambiguous)}
+	}
+	if err := oldErrors(text, fromV2, u); err != nil {
+		return Upgraded{Text: text, From: u.Format}, err
 	}
 	return out, nil
 }
@@ -145,7 +151,17 @@ func UpgradeFile(path string, from int) (Upgraded, error) {
 	if from > FormatMajor {
 		return Upgraded{From: from}, tooNew(path, from)
 	}
-	u, err := shcl.UpgradeFile(path, from > 0 && from < FormatMajor)
+	fromV2 := from > 0 && from < FormatMajor
+	// shcl writes the file itself, so this has to come first. A file that
+	// won't read gets shcl's own error below.
+	if text, err := shclw.ReadText(path); err == nil {
+		u := shcl.Upgrade(text, fromV2)
+		if err := oldErrors(text, fromV2, u); err != nil {
+			err.Path = path
+			return Upgraded{From: u.Format}, err
+		}
+	}
+	u, err := shcl.UpgradeFile(path, fromV2)
 	out := upgraded(u)
 	if err == nil {
 		return out, nil
@@ -163,6 +179,29 @@ func UpgradeFile(path string, from int) (Upgraded, error) {
 		}
 	}
 	return out, e
+}
+
+// oldErrors refuses a file taken as 2.x that shcl 2.0 reports errors on.
+// The old program read those lines as it repaired them, or not at all, and
+// an open raw block took the rest of the file. The upgrade would turn that
+// into a clean file that means something else (design.md, Format and
+// upgrade).
+func oldErrors(text string, fromV2 bool, u shcl.Upgraded) *shclw.Error {
+	if u.Ambiguous > 0 || (u.Current && !(fromV2 && u.Format < FormatMajor)) {
+		return nil
+	}
+	var errs []Diag
+	lines := map[int]bool{}
+	for _, d := range shclw2.Parse(text).Diags() {
+		if d.Severity == shclw.SevError {
+			errs = append(errs, d)
+			lines[d.Line] = true
+		}
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return &shclw.Error{Kind: shclw.ErrRefused, Diags: errs, Msg: fmt.Sprintf("shcl 2.0 reports errors on %d lines; fix them and upgrade again", len(lines))}
 }
 
 func upgraded(u shcl.Upgraded) Upgraded {

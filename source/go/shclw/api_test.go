@@ -4,6 +4,7 @@
 package shclw_test
 
 import (
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -90,5 +91,40 @@ func TestOpen(t *testing.T) {
 	}
 	if _, err := shclw1.Open(write("v3.shcl", "a: [x]\n##    Format   3\n")); shclw.KindOf(err) != shclw.ErrTooNew {
 		t.Errorf("v1 on a format 3 file: got %v, want toonew", err)
+	}
+}
+
+// A 2.x file the old shcl reported errors on is refused, and UpgradeFile
+// leaves it as it was, with no backup. A clean one still goes.
+func TestUpgradeRefusesOldErrors(t *testing.T) {
+	for _, c := range []struct {
+		text string
+		line int
+	}{
+		{"a: 1\nb: ```\nraw line\nc: 2\n", 2},
+		{"x: [ab]\ny: 1\n", 1},
+	} {
+		_, err := shclw3.Upgrade(c.text, 2)
+		var e *shclw.Error
+		if !errors.As(err, &e) || e.Kind != shclw.ErrRefused || len(e.Diags) == 0 || e.Diags[0].Line != c.line {
+			t.Errorf("Upgrade %q: got %v, want refused at line %d", c.text, err, c.line)
+		}
+		dir := t.TempDir()
+		path := filepath.Join(dir, "c.shcl")
+		if err := os.WriteFile(path, []byte(c.text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := shclw3.UpgradeFile(path, 2); shclw.KindOf(err) != shclw.ErrRefused {
+			t.Errorf("UpgradeFile %q: got %v, want refused", c.text, err)
+		}
+		if b, _ := os.ReadFile(path); string(b) != c.text {
+			t.Errorf("UpgradeFile %q: file is now %q", c.text, b)
+		}
+		if ents, _ := os.ReadDir(dir); len(ents) != 1 {
+			t.Errorf("UpgradeFile %q: %d files beside it, want none", c.text, len(ents)-1)
+		}
+	}
+	if u, err := shclw3.Upgrade("tags: a, b\n", 2); err != nil || !u.Changed {
+		t.Errorf("clean 2.x file: got %+v, %v, want changed", u, err)
 	}
 }

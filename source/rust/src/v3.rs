@@ -102,15 +102,20 @@ pub fn format_of(text: &str) -> u32 {
 /// Converts a file written for an older format. With `from` 0 the file's
 /// Format line decides, and a file with none is taken as current. Pass 2
 /// for a file known to be from shcl 2.x or older; it can't tell those apart
-/// by itself. A file that reads two ways is `Ambiguous`.
+/// by itself. A file that reads two ways is `Ambiguous`, and one shcl 2.0
+/// reports errors on is `Refused`, with those errors in `diags`.
 pub fn upgrade(text: &str, from: u32) -> Result<Upgraded, Error> {
 	let f = format_of(text).max(from);
 	if f > FORMAT_MAJOR {
 		return Err(too_new(f));
 	}
-	let u = shcl::upgrade(text, from > 0 && from < FORMAT_MAJOR);
+	let from_v2 = from > 0 && from < FORMAT_MAJOR;
+	let u = shcl::upgrade(text, from_v2);
 	if u.ambiguous > 0 {
 		return Err(Error::new(ErrKind::Ambiguous).msg(format!("{} lines read two ways", u.ambiguous)));
+	}
+	if let Some(e) = old_errors(text, from_v2, &u) {
+		return Err(e);
 	}
 	Ok(upgraded(u))
 }
@@ -121,17 +126,50 @@ pub fn upgrade_file(path: &str, from: u32) -> Result<Upgraded, Error> {
 	if from > FORMAT_MAJOR {
 		return Err(too_new(from).path(path));
 	}
-	shcl::upgrade_file(path, from > 0 && from < FORMAT_MAJOR)
-		.map(upgraded)
-		.map_err(|e| {
-			let kind = match &e {
-				shcl::UpgradeError::NotFound(_) => ErrKind::NotFound,
-				shcl::UpgradeError::Ambiguous { .. } => ErrKind::Ambiguous,
-				shcl::UpgradeError::BackupTaken(_) => ErrKind::BackupTaken,
-				shcl::UpgradeError::Io(_) => ErrKind::Io,
-			};
-			Error::new(kind).path(path).msg(e.to_string())
-		})
+	let from_v2 = from > 0 && from < FORMAT_MAJOR;
+	// shcl writes the file itself, so this has to come first. A file that
+	// won't read gets shcl's own error below.
+	if let Ok(text) = crate::read_text(path) {
+		if let Some(e) = old_errors(&text, from_v2, &shcl::upgrade(&text, from_v2)) {
+			return Err(e.path(path));
+		}
+	}
+	shcl::upgrade_file(path, from_v2).map(upgraded).map_err(|e| {
+		let kind = match &e {
+			shcl::UpgradeError::NotFound(_) => ErrKind::NotFound,
+			shcl::UpgradeError::Ambiguous { .. } => ErrKind::Ambiguous,
+			shcl::UpgradeError::BackupTaken(_) => ErrKind::BackupTaken,
+			shcl::UpgradeError::Io(_) => ErrKind::Io,
+		};
+		Error::new(kind).path(path).msg(e.to_string())
+	})
+}
+
+/// Refuses a file taken as 2.x that shcl 2.0 reports errors on. The old
+/// program read those lines as it repaired them, or not at all, and an open
+/// raw block took the rest of the file. The upgrade would turn that into a
+/// clean file that means something else (design.md, Format and upgrade).
+fn old_errors(text: &str, from_v2: bool, u: &shcl::Upgrade) -> Option<Error> {
+	if u.ambiguous > 0 || (u.current && !(from_v2 && u.format < FORMAT_MAJOR)) {
+		return None;
+	}
+	let errs: Vec<Diag> = crate::v2::parse(text)
+		.diags()
+		.into_iter()
+		.filter(|d| d.severity == Severity::Error)
+		.collect();
+	if errs.is_empty() {
+		return None;
+	}
+	let mut lines: Vec<usize> = errs.iter().map(|d| d.line).collect();
+	lines.sort_unstable();
+	lines.dedup();
+	let mut e = Error::new(ErrKind::Refused).msg(format!(
+		"shcl 2.0 reports errors on {} lines; fix them and upgrade again",
+		lines.len()
+	));
+	e.diags = errs;
+	Some(e)
 }
 
 fn upgraded(u: shcl::Upgrade) -> Upgraded {

@@ -168,13 +168,15 @@ Go names are listed. Rust uses the same words in snake case, and `ShclDoc` has t
 	- With `from` 0 the Format line decides, and a file with none is taken as current.
 	- `from` 2 says the file is known to be from shcl 2.x or older. The file can't say so itself, so only the program can.
 	- `UpgradeFile` copies the original beside it first, and `Backup` names the copy.
+	- A file taken as 2.x that shcl 2.0 reports errors on is `ErrRefused`, with those errors in the error's `Diags`. Nothing is written and no backup is made. 2.0 read such a line the way it repaired it, or not at all, and a raw block that never closes took the rest of the file. The upgrade would make a clean file out of it that means something else.
+	- That check needs shcl 2.0, so the 3.0 adapter builds it in too. In Rust the `shcl3` feature turns on `shcl2`.
 	- 1.2 and 2.0 have nothing to upgrade. They hand the text back, or refuse a newer file with `ErrTooNew`.
 
 ### Errors
 
 - One error type, `*shclw.Error` in Go and `shclw::Error` in Rust, with a kind a program can act on: `NotFound`, `IO`, `Strict`, `Refused`, `BadPath`, `BadValue`, `TooNew`, `Unsupported`, `Ambiguous`, `BackupTaken`, and `NoReadBack`.
 
-- `Refused` is a save that would drop lines the load couldn't use. 2.0 and 3.0 refuse those.
+- `Refused` is a save that would drop lines the load couldn't use. 2.0 and 3.0 refuse those. It's also an upgrade of a 2.x file that shcl 2.0 reports errors on.
 
 ### Everything else
 
@@ -201,6 +203,7 @@ Each row has a test, either a shared case or an API test.
 | A float like `1e400` in the file         | 1.2 and 2.0 read infinity as `Good`. 3.0 says `BadType`.           | `BadType`, everywhere. An array keeps its length, with 0 for the bad items, as in 3.0.
 | A put of infinity or NaN                 | 1.2 and 2.0 write it, and it reads back as `BadType`. 3.0 refuses. | Refuses with `BadValue`, everywhere, and changes nothing.
 | Opening a newer format's file            | 1.2 and 2.0 read it, wrongly.                                      | `ErrTooNew`.
+| Upgrading a 2.x file 2.0 had errors on   | 3.0 writes a clean file, with nothing lost and no error.           | Refuses with `ErrRefused` and leaves the file alone.
 | A file that isn't UTF-8                  | Varies by language.                                                | `ErrIO`, everywhere.
 | Walking repeated entries                 | Selector syntax differs by version.                                | `Each` gives paths, and `Child` extends them.
 | Saving in 1.2                            | No save call.                                                      | `Write` saves atomically.
@@ -288,6 +291,8 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 - A put is always read back. shcl 4 plans the same check inside its setters, and until then the wrapper is the one place to do it for every version.
 
 - A put of infinity or NaN is refused with `BadValue` in every version, as 3.0 does. Writing one and then saying `NoReadBack` was the other choice, but it leaves a value in the file that no read takes.
+
+- An upgrade refuses a 2.x file that shcl 2.0 reports errors on, rather than count those lines in `Unsure`. A count is easy to skip over, and the upgraded file loads clean, so nothing would point at those lines again. It's the same answer shcl's own `migrate` gives a raw block that never closes.
 
 - MIT, since programs copy this code into themselves.
 

@@ -1,0 +1,3 @@
+diags
+upgrade
+upgrade	2

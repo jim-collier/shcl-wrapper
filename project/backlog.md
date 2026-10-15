@@ -596,7 +596,7 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 - Comment on a path with several instances changes the first one on 1.2 and 2.0
 	- ID: 2026101514071600
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Severity: Low
 	- Opened: 20261015-140716
 	- Opened by: JC
@@ -605,17 +605,37 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- Comment on `n` in a file with `n: 1` and `n: 2`, on 1.2 or 2.0.
 	- Incorrect behavior: It says ok and puts the comment above the first `n`.
 	- Expected behavior: `BadPath`, as 3.0 does and as Put and PutSyntax do.
+	- Reproduced: 20261015, on 1.2 and 2.0, in Go and Rust. `t.x` under a table written twice did the same. 3.0 already said `BadPath` for both.
+	- Actual cause: The 1.2 and 2.0 adapters checked for several instances in Put and PutSyntax, but not in Comment.
+	- Actual fix: Put, PutSyntax, and Comment in the 1.2 and 2.0 adapters share one check. A path with several instances is `BadPath`, and nothing changes. A single instance such as `n[#1]` still takes a comment. design.md's table lists Comment with Put.
+	- Verified: the gate and a 20 second fuzz run pass.
+	- Branch: comment-fix
+	- Commit: 0e246a3
+	- Test case: tests/cases/015-comment. It failed on 1.2 and 2.0 in Go and Rust before the fix, and passes after.
+	- Swept: Put, PutSyntax, Comment, and Remove in Go `shclw1` to `shclw3` and Rust `v1` to `v3`. 3.0 needs no change, since shcl 3.0 refuses these itself. Remove takes out every instance and counts them on every version, as design.md says, so it stays as is. A table written twice reads as one instance on every version, so a comment on it is fine.
+	- Acceptance signoff: Self-closed: matches what Put already does.
+	- Closed: 20261015-143031
 
 - The Rust shared-case test leaves its scratch folders behind
 	- ID: 2026101514214605
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Severity: Low
 	- Opened: 20261015-142146
 	- Steps to reproduce:
 		- Run `cargo test --all-features --test cases`.
 	- Incorrect behavior: A `shclw-rust-cases-PID` folder with one folder per case and version stays in the temp folder after every run.
 	- Expected behavior: It's removed at the end, as Go's `t.TempDir()` does.
+	- Reproduced: 20261015. A passing run left `shclw-rust-cases-PID`, with one folder per case and version. The API tests removed theirs only when every assert passed.
+	- Actual cause: The case test made a folder per case and never removed their parent. The API tests removed theirs on the last line, which a failed assert never gets to.
+	- Actual fix: The Rust tests share one scratch folder type that removes itself when dropped, which also happens when a test fails. cicd/fuzz.py now removes its own work files at the end, and the `--work` folder too when it made it and it's empty.
+	- Verified: the gate and a 20 second fuzz run pass.
+	- Branch: comment-fix
+	- Commit: a05b5e5
+	- Test case: None in the suite, since the folder goes after the test ends. A passing run and a failing one, of the case test and of the API tests, both left nothing.
+	- Swept: Rust `tests/cases.rs` and `tests/api.rs` are the only Rust tests that make folders. Go's tests use `t.TempDir()`, and its fuzzer writes no files. cicd/fuzz.py left its `--work` folder behind when run by itself. Under cicd.bash all of these sit inside the run's own folder, which its exit trap removes, so a cicd run hid the leak.
+	- Acceptance signoff: Self-closed: does what the item asked, checked before and after.
+	- Closed: 20261015-143031
 
 - Commit and publish from cicd
 	- ID: 2026101512024171

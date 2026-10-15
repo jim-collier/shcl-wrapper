@@ -33,6 +33,8 @@ class Case:
 	doc: str
 	script: str
 	puts: list[tuple[int, str, str, list[str]]] = field(default_factory=list)
+	# Each edit's first count probe, how many there are, and the edit's index.
+	edits: list[tuple[int, int, int]] = field(default_factory=list)
 
 
 def gen_scalar(rng: random.Random) -> str:
@@ -84,9 +86,23 @@ def gen_doc(rng: random.Random, version: int) -> str:
 	return "\n".join(lines) + ("\n" if rng.random() < 0.9 else "")
 
 
-def gen_path(rng: random.Random) -> str:
+def gen_parts(rng: random.Random) -> list[str]:
 	parts = [rng.choice(NAMES) for _ in range(rng.randrange(1, 4))]
-	return ".".join(parts)
+	if len(parts) > 1 and rng.random() < 0.1:
+		parts[rng.randrange(1, len(parts))] = "*"
+	return parts
+
+
+def gen_path(rng: random.Random) -> str:
+	return ".".join(gen_parts(rng))
+
+
+def add_edit(case: Case, ops: list[str], parts: list[str], op: str) -> None:
+	"""Counts each step of the path, then makes the edit, for check_edits."""
+	first = len(ops)
+	ops.extend(f"count\t{'.'.join(parts[:k])}" for k in range(1, len(parts) + 1))
+	ops.append(op)
+	case.edits.append((first, len(parts), len(ops) - 1))
 
 
 def esc_field(s: str) -> str:
@@ -124,9 +140,10 @@ def gen_case(seed: int, corpus: list[str]) -> Case:
 			ops.append(f"get\t{rng.choice(TYPES)}\t{gen_path(rng)}")
 		elif roll < 0.47:
 			typ = rng.choice(TYPES[:-1])
-			path = gen_path(rng)
+			parts = gen_parts(rng)
+			path = ".".join(parts)
 			vals = gen_value(rng, typ)
-			ops.append("\t".join(["put", typ, path, *map(esc_field, vals)]))
+			add_edit(case, ops, parts, "\t".join(["put", typ, path, *map(esc_field, vals)]))
 			case.puts.append((len(ops) - 1, typ, path, vals))
 			ops.append(f"get\t{typ}\t{path}")
 		elif roll < 0.55:
@@ -134,7 +151,11 @@ def gen_case(seed: int, corpus: list[str]) -> Case:
 			path = rng.choice((gen_path(rng), rng.choice(NAMES)))
 			ops.append(f"lines\t{path}")
 			ops.append(f"{rng.choice(('first', 'last'))}\t{rng.choice(TYPES)}\t{path}")
-		elif roll < 0.62:
+		elif roll < 0.6:
+			parts = gen_parts(rng)
+			op = rng.choice(("comment", "syntax"))
+			add_edit(case, ops, parts, f"{op}\t{'.'.join(parts)}\t{rng.choice(WORDS)}")
+		elif roll < 0.66:
 			fallback = rng.choice((gen_value(rng, "int")[0], "0.5", "1e400", "nan"))
 			ops.append(f"or\t{rng.choice(TYPES)}\t{gen_path(rng)}\t{fallback}")
 		else:
@@ -268,6 +289,22 @@ def check_finite(output: str) -> list[str]:
 	return problems
 
 
+def check_edits(case: Case, output: str) -> list[str]:
+	"""An edit that said ok had one instance at every step it found, as 3.0
+	has it. A step with several makes it badpath, even an inner one."""
+	blocks = output.split("\n> ")
+	problems = []
+	for first, steps, op_index in case.edits:
+		if op_index >= len(blocks):
+			continue
+		counts = [(blocks[first + k].split("\n") + [""])[1] for k in range(steps)]
+		said = (blocks[op_index].split("\n") + [""])[1]
+		found = next((c for c in counts if c != "1"), "1")
+		if said == "ok" and found.isdigit() and int(found) > 1:
+			problems.append(f"{blocks[op_index].split(chr(10))[0]!r} said ok, with step counts {counts}")
+	return problems
+
+
 def check_picks(output: str) -> list[str]:
 	"""A first or last read right after lines of the same path takes one
 	instance, on the first or last of those lines."""
@@ -281,6 +318,10 @@ def check_picks(output: str) -> list[str]:
 			continue
 		lines = prev[1].split("\t")[1:]
 		status, line = (cur[1].split("\t") + [""])[:2]
+		if not lines and "*" in op[2]:
+			# The path comes back as it is, and a plain read of a wildcard
+			# differs by version.
+			continue
 		if status == "Multiple":
 			problems.append(f"{cur[0]!r} read as {cur[1]!r}")
 		elif not lines and status not in ("NotFound", "BadPath"):
@@ -352,6 +393,7 @@ def main() -> int:
 				problems.append("outputs differ")
 			elif go[0] == 0:
 				problems += check_roundtrips(case, go[1])
+				problems += check_edits(case, go[1])
 				problems += check_finite(go[1])
 				problems += check_picks(go[1])
 			for line in go[1].split("\n"):

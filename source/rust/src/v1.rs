@@ -138,13 +138,13 @@ impl Doc {
 		&mut self.d
 	}
 
-	/// Refuses a path with several instances. shcl 1.2 would set the first
-	/// one and say ok, where 3.0 refuses.
-	fn only_one(&self, path: &str) -> Result<(), Error> {
-		if self.d.count(path) > 1 {
-			return Err(Error::new(ErrKind::BadPath).path(path).msg("Multiple"));
-		}
-		Ok(())
+	/// The one way an edit reaches the shcl document, so none can skip the
+	/// check that the path names one instance at every step. shcl 1.2
+	/// would edit the first one and say ok, where 3.0 refuses.
+	fn set(&mut self, path: &str, apply: impl FnOnce(&mut shcl::Document) -> bool) -> Result<(), Error> {
+		crate::one_target(self, path)?;
+		let ok = apply(&mut self.d);
+		self.set_err(path, ok)
 	}
 
 	fn set_err(&self, path: &str, ok: bool) -> Result<(), Error> {
@@ -290,18 +290,12 @@ impl ShclDoc for Doc {
 	}
 
 	fn each(&self, path: &str) -> Vec<Node> {
-		let n = self.d.count(path);
-		let vals = self.d.instances(path);
-		(0..n)
-			.map(|i| {
-				let p = if n > 1 {
-					format!("{path}[#{i}]")
-				} else {
-					path.to_owned()
-				};
-				let value = vals.get(i).cloned().unwrap_or_default();
-				let line = self.d.line(&p);
-				Node { path: p, value, line }
+		crate::each_paths(self, |p| self.d.children(p), path)
+			.into_iter()
+			.map(|p| Node {
+				value: self.d.instances(&p).into_iter().next().unwrap_or_default(),
+				line: self.d.line(&p),
+				path: p,
 			})
 			.collect()
 	}
@@ -320,27 +314,23 @@ impl ShclDoc for Doc {
 	fn put(&mut self, path: &str, v: impl Into<Value>) -> Result<(), Error> {
 		let v = v.into();
 		crate::check_value(path, &v)?;
-		self.only_one(path)?;
-		let ok = match &v {
-			Value::Int(x) => self.d.set_int(path, *x),
-			Value::Float(x) => self.d.set_float(path, *x),
-			Value::Bool(x) => self.d.set_bool(path, *x),
-			Value::Str(x) => self.d.set_string(path, x),
+		self.set(path, |d| match &v {
+			Value::Int(x) => d.set_int(path, *x),
+			Value::Float(x) => d.set_float(path, *x),
+			Value::Bool(x) => d.set_bool(path, *x),
+			Value::Str(x) => d.set_string(path, x),
 			Value::Strs(x) => {
 				let refs: Vec<&str> = x.iter().map(String::as_str).collect();
-				self.d.set_string_array(path, &refs)
+				d.set_string_array(path, &refs)
 			}
-			Value::Ints(x) => self.d.set_int_array(path, x),
-			Value::Floats(x) => self.d.set_float_array(path, x),
-		};
-		self.set_err(path, ok)?;
+			Value::Ints(x) => d.set_int_array(path, x),
+			Value::Floats(x) => d.set_float_array(path, x),
+		})?;
 		crate::verify_put(self, path, &v)
 	}
 
 	fn put_syntax(&mut self, path: &str, text: &str) -> Result<(), Error> {
-		self.only_one(path)?;
-		let ok = self.d.set_literal(path, text);
-		self.set_err(path, ok)?;
+		self.set(path, |d| d.set_literal(path, text))?;
 		let mut alone = new();
 		// A failed set leaves alone empty, which the check reports.
 		let _ = alone.d.set_literal("k", text);
@@ -348,9 +338,7 @@ impl ShclDoc for Doc {
 	}
 
 	fn comment(&mut self, path: &str, text: &str) -> Result<(), Error> {
-		self.only_one(path)?;
-		let ok = self.d.set_comment(path, text);
-		self.set_err(path, ok)
+		self.set(path, |d| d.set_comment(path, text))
 	}
 
 	fn remove(&mut self, path: &str) -> usize {

@@ -452,9 +452,10 @@ func InFileOrder(d Doc, path string) []Node {
 }
 
 // FirstOf is path narrowed to its first instance in the file, or path as it
-// is when it names fewer than 2.
+// is when it names none. One instance still gets its Each path, which an
+// edit takes where an inner step of path repeats.
 func FirstOf(d Doc, path string) string {
-	if nodes := InFileOrder(d, path); len(nodes) > 1 {
+	if nodes := InFileOrder(d, path); len(nodes) > 0 {
 		return nodes[0].Path
 	}
 	return path
@@ -462,7 +463,7 @@ func FirstOf(d Doc, path string) string {
 
 // LastOf is FirstOf for the last instance.
 func LastOf(d Doc, path string) string {
-	if nodes := InFileOrder(d, path); len(nodes) > 1 {
+	if nodes := InFileOrder(d, path); len(nodes) > 0 {
 		return nodes[len(nodes)-1].Path
 	}
 	return path
@@ -476,6 +477,261 @@ func LinesOf(d Doc, path string) []int {
 		out[i] = n.Line
 	}
 	return out
+}
+
+// OneTarget refuses an edit whose path reaches several instances at any
+// step, not only the last, unless a selector names one there. That's what
+// 3.0 does. 1.2 and 2.0 take the first instance and say ok, so their
+// setters all go through this. Paths are in the 1.2 and 2.0 spelling.
+func OneTarget(d Doc, path string) error {
+	for _, s := range splitPath(path) {
+		switch n := d.Count(path[:s.end]); {
+		case n == 0:
+			// The rest is new, so there's one place to make it.
+			return nil
+		case n > 1:
+			return &Error{Kind: ErrBadPath, Path: path, Msg: "Multiple"}
+		}
+	}
+	return nil
+}
+
+// EachPaths is a path for each instance path names, in the order shcl reads
+// them, for 1.2 and 2.0, which have no instance paths of their own. Every
+// step that repeats gets an index, so a path reads and edits that instance
+// alone. A wildcard lists each node it reaches, and a slot that reaches no
+// node or several is left out, as 3.0's ReadFields has it. children is
+// shcl's list of names under a one-instance path, repeats included.
+func EachPaths(d Doc, children func(path string) []string, path string) []string {
+	segs := splitPath(path)
+	if segs == nil {
+		return nil
+	}
+	return expand(d, children, []string{""}, segs)
+}
+
+func expand(d Doc, children func(string) []string, bases []string, segs []segment) []string {
+	for i, s := range segs {
+		if s.sel == selValue {
+			// A value picks within each base, so it can stay as typed.
+			var next []string
+			for _, b := range bases {
+				if p := join(b, s.text); d.Count(p) > 0 {
+					next = append(next, p)
+				}
+			}
+			bases = next
+			continue
+		}
+		var next []string
+		for _, b := range bases {
+			if s.star {
+				next = append(next, kids(d, children, b)...)
+			} else {
+				next = append(next, instances(d, join(b, s.name))...)
+			}
+		}
+		switch {
+		case s.star || s.sel == selAll:
+			rest := segs[i+1:]
+			if len(rest) == 0 {
+				return next
+			}
+			var out []string
+			for _, slot := range next {
+				got := expand(d, children, []string{slot}, rest)
+				if len(got) == 1 || hasWildcard(rest) {
+					out = append(out, got...)
+				}
+			}
+			return out
+		case s.sel == selIndex:
+			// An index counts across every base, as shcl reads it.
+			if s.index < uint64(len(next)) {
+				next = next[s.index : s.index+1]
+			} else {
+				next = nil
+			}
+		}
+		bases = next
+	}
+	return bases
+}
+
+func instances(d Doc, p string) []string {
+	n := d.Count(p)
+	if n == 1 {
+		return []string{p}
+	}
+	out := make([]string, n)
+	for i := range out {
+		out[i] = p + "[#" + strconv.Itoa(i) + "]"
+	}
+	return out
+}
+
+func kids(d Doc, children func(string) []string, base string) []string {
+	names := children(base)
+	total := make(map[string]int, len(names))
+	for _, n := range names {
+		total[strings.ToLower(n)]++
+	}
+	at := make(map[string]int, len(names))
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		p, k := d.Child(base, n), strings.ToLower(n)
+		if total[k] > 1 {
+			p += "[#" + strconv.Itoa(at[k]) + "]"
+			at[k]++
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+func join(base, seg string) string {
+	if base == "" {
+		return seg
+	}
+	return base + "." + seg
+}
+
+func hasWildcard(segs []segment) bool {
+	for _, s := range segs {
+		if s.star || s.sel == selAll {
+			return true
+		}
+	}
+	return false
+}
+
+type selKind int
+
+const (
+	selNone selKind = iota
+	selIndex
+	selValue
+	selAll
+)
+
+// segment is one step of a 1.2 or 2.0 path. name is the name as typed and
+// text the name with its selector; end is where the step ends in the path.
+type segment struct {
+	name, text string
+	end        int
+	star       bool
+	sel        selKind
+	index      uint64
+}
+
+// splitPath splits a path the way shcl 1.2 and 2.0 scan a lookup, or gives
+// nil for one they'd refuse, which leaves the refusal to shcl.
+func splitPath(path string) []segment {
+	var out []segment
+	i, n := 0, len(path)
+	space := func() {
+		for i < n && (path[i] == ' ' || path[i] == '\t') {
+			i++
+		}
+	}
+	quoted := func() bool {
+		q := path[i]
+		for i++; i < n; i++ {
+			switch path[i] {
+			case '\\':
+				i++
+			case q:
+				i++
+				return true
+			}
+		}
+		return false
+	}
+	for {
+		space()
+		start := i
+		var s segment
+		switch {
+		case i >= n:
+			return nil
+		case path[i] == '"' || path[i] == '\'':
+			if !quoted() {
+				return nil
+			}
+		case path[i] == '*':
+			i++
+			s.star = true
+		default:
+			for i < n && bareChar(path[i]) {
+				i++
+			}
+			if i == start {
+				return nil
+			}
+		}
+		s.name = path[start:i]
+		space()
+		j := i
+		if j < n && path[j] == ':' {
+			for j++; j < n && (path[j] == ' ' || path[j] == '\t'); j++ {
+			}
+		}
+		if j < n && path[j] == '[' {
+			i = j + 1
+			space()
+			if i < n && (path[i] == '"' || path[i] == '\'') {
+				if !quoted() {
+					return nil
+				}
+				s.sel = selValue
+			} else {
+				from := i
+				for i < n && path[i] != ']' {
+					i++
+				}
+				var ok bool
+				if s.sel, s.index, ok = selectorOf(strings.TrimSpace(path[from:i])); !ok {
+					return nil
+				}
+			}
+			space()
+			if i >= n || path[i] != ']' || s.star {
+				return nil
+			}
+			i++
+		}
+		s.end = i
+		s.text = path[start:i]
+		out = append(out, s)
+		space()
+		if i >= n {
+			return out
+		}
+		if path[i] != '.' {
+			return nil
+		}
+		i++
+	}
+}
+
+func selectorOf(body string) (selKind, uint64, bool) {
+	switch {
+	case body == "":
+		return selNone, 0, false
+	case body == "*":
+		return selAll, 0, true
+	}
+	digits := strings.TrimPrefix(strings.TrimPrefix(body, "#"), "+")
+	if digits != "" && strings.Trim(digits, "0123456789") == "" {
+		if k, err := strconv.ParseUint(digits, 10, 64); err == nil {
+			return selIndex, k, true
+		}
+	}
+	return selValue, 0, true
+}
+
+func bareChar(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_'
 }
 
 const formatHead = "##    Format   "

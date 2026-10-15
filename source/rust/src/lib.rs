@@ -337,7 +337,8 @@ pub trait ShclDoc {
 	/// Child names under `path` once each, in file order. With several
 	/// instances it's every instance's children.
 	fn names(&self, path: &str) -> Vec<String>;
-	/// Every instance `path` names, each with a path that reads it alone.
+	/// Every instance `path` names, each with a path that reads and edits it
+	/// alone.
 	fn each(&self, path: &str) -> Vec<Node>;
 	fn line(&self, path: &str) -> usize;
 	/// The line of each instance of `path`, in file order. An instance a
@@ -346,23 +347,20 @@ pub trait ShclDoc {
 		in_file_order(self.each(path)).iter().map(|n| n.line).collect()
 	}
 	/// `path` narrowed to its first instance in the file, so a read or an
-	/// edit takes that one where it would say `Multiple`. A path with fewer
-	/// than 2 instances comes back as it is.
+	/// edit takes that one where it would say `Multiple`. A path with no
+	/// instances comes back as it is. One instance still gets its `each`
+	/// path, which an edit takes where an inner step of `path` repeats.
 	fn first(&self, path: &str) -> String {
-		let nodes = in_file_order(self.each(path));
-		match nodes.first() {
-			Some(n) if nodes.len() > 1 => n.path.clone(),
-			_ => path.to_owned(),
-		}
+		in_file_order(self.each(path))
+			.first()
+			.map_or_else(|| path.to_owned(), |n| n.path.clone())
 	}
 	/// `first` for the last instance in the file, the one that wins where a
 	/// later line overrides an earlier one.
 	fn last(&self, path: &str) -> String {
-		let nodes = in_file_order(self.each(path));
-		match nodes.last() {
-			Some(n) if nodes.len() > 1 => n.path.clone(),
-			_ => path.to_owned(),
-		}
+		in_file_order(self.each(path))
+			.last()
+			.map_or_else(|| path.to_owned(), |n| n.path.clone())
 	}
 	/// `base` with one more name on the end, quoted if it needs it.
 	fn child(&self, base: &str, name: &str) -> String;
@@ -513,6 +511,254 @@ pub fn dedupe_names(names: Vec<String>) -> Vec<String> {
 		.into_iter()
 		.filter(|n| seen.insert(n.to_ascii_lowercase()))
 		.collect()
+}
+
+/// Refuses an edit whose path reaches several instances at any step, not
+/// only the last, unless a selector names one there. That's what 3.0 does.
+/// 1.2 and 2.0 take the first instance and say ok, so their setters all go
+/// through this. Paths are in the 1.2 and 2.0 spelling.
+pub fn one_target<D: ShclDoc + ?Sized>(d: &D, path: &str) -> Result<(), Error> {
+	for s in split_path(path).unwrap_or_default() {
+		match d.count(&path[..s.end]) {
+			// The rest is new, so there's one place to make it.
+			0 => return Ok(()),
+			1 => {}
+			_ => return Err(Error::new(ErrKind::BadPath).path(path).msg("Multiple")),
+		}
+	}
+	Ok(())
+}
+
+/// A path for each instance `path` names, in the order shcl reads them, for
+/// 1.2 and 2.0, which have no instance paths of their own. Every step that
+/// repeats gets an index, so a path reads and edits that instance alone. A
+/// wildcard lists each node it reaches, and a slot that reaches no node or
+/// several is left out, as 3.0's `read_fields` has it. `children` is shcl's
+/// list of names under a one-instance path, repeats included.
+pub fn each_paths<D: ShclDoc + ?Sized>(d: &D, children: impl Fn(&str) -> Vec<String>, path: &str) -> Vec<String> {
+	let Some(segs) = split_path(path) else {
+		return Vec::new();
+	};
+	expand(d, &children, vec![String::new()], &segs)
+}
+
+fn expand<D: ShclDoc + ?Sized>(
+	d: &D,
+	children: &impl Fn(&str) -> Vec<String>,
+	mut bases: Vec<String>,
+	segs: &[Segment<'_>],
+) -> Vec<String> {
+	for (i, s) in segs.iter().enumerate() {
+		if s.sel == Sel::Value {
+			// A value picks within each base, so it can stay as typed.
+			bases = bases
+				.iter()
+				.map(|b| join(b, s.text))
+				.filter(|p| d.count(p) > 0)
+				.collect();
+			continue;
+		}
+		let mut next = Vec::new();
+		for b in &bases {
+			if s.star {
+				next.extend(kids(d, children, b));
+			} else {
+				next.extend(instances(d, &join(b, s.name)));
+			}
+		}
+		match s.sel {
+			_ if s.star || s.sel == Sel::All => {
+				let rest = &segs[i + 1..];
+				if rest.is_empty() {
+					return next;
+				}
+				let mut out = Vec::new();
+				for slot in next {
+					let got = expand(d, children, vec![slot], rest);
+					if got.len() == 1 || has_wildcard(rest) {
+						out.extend(got);
+					}
+				}
+				return out;
+			}
+			// An index counts across every base, as shcl reads it.
+			Sel::Index(k) => {
+				next = usize::try_from(k)
+					.ok()
+					.and_then(|k| next.get(k).cloned())
+					.into_iter()
+					.collect();
+			}
+			Sel::None | Sel::Value | Sel::All => {}
+		}
+		bases = next;
+	}
+	bases
+}
+
+fn instances<D: ShclDoc + ?Sized>(d: &D, p: &str) -> Vec<String> {
+	match d.count(p) {
+		1 => vec![p.to_owned()],
+		n => (0..n).map(|i| format!("{p}[#{i}]")).collect(),
+	}
+}
+
+fn kids<D: ShclDoc + ?Sized>(d: &D, children: &impl Fn(&str) -> Vec<String>, base: &str) -> Vec<String> {
+	let names = children(base);
+	let mut total = std::collections::HashMap::new();
+	for n in &names {
+		*total.entry(n.to_ascii_lowercase()).or_insert(0) += 1;
+	}
+	let mut at = std::collections::HashMap::new();
+	names
+		.iter()
+		.map(|n| {
+			let (mut p, k) = (d.child(base, n), n.to_ascii_lowercase());
+			if total[&k] > 1 {
+				let i = at.entry(k).or_insert(0);
+				p = format!("{p}[#{i}]");
+				*i += 1;
+			}
+			p
+		})
+		.collect()
+}
+
+fn join(base: &str, seg: &str) -> String {
+	if base.is_empty() {
+		return seg.to_owned();
+	}
+	format!("{base}.{seg}")
+}
+
+fn has_wildcard(segs: &[Segment<'_>]) -> bool {
+	segs.iter().any(|s| s.star || s.sel == Sel::All)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sel {
+	None,
+	Index(u64),
+	Value,
+	All,
+}
+
+/// One step of a 1.2 or 2.0 path. `name` is the name as typed and `text`
+/// the name with its selector; `end` is where the step ends in the path.
+#[derive(Debug)]
+struct Segment<'a> {
+	name: &'a str,
+	text: &'a str,
+	end: usize,
+	star: bool,
+	sel: Sel,
+}
+
+/// Splits a path the way shcl 1.2 and 2.0 scan a lookup, or gives `None`
+/// for one they'd refuse, which leaves the refusal to shcl.
+fn split_path(path: &str) -> Option<Vec<Segment<'_>>> {
+	let b = path.as_bytes();
+	let n = b.len();
+	let space = |mut i: usize| {
+		while i < n && (b[i] == b' ' || b[i] == b'\t') {
+			i += 1;
+		}
+		i
+	};
+	// The end of the quote opening at i, past its closing quote.
+	let quoted = |mut i: usize| {
+		let q = b[i];
+		i += 1;
+		while i < n {
+			match b[i] {
+				b'\\' => i += 2,
+				c if c == q => return Some(i + 1),
+				_ => i += 1,
+			}
+		}
+		None
+	};
+	let mut out = Vec::new();
+	let mut i = 0;
+	loop {
+		i = space(i);
+		let start = i;
+		let mut star = false;
+		match b.get(i) {
+			None => return None,
+			Some(b'"' | b'\'') => i = quoted(i)?,
+			Some(b'*') => {
+				i += 1;
+				star = true;
+			}
+			Some(_) => {
+				while i < n && bare_char(b[i]) {
+					i += 1;
+				}
+				if i == start {
+					return None;
+				}
+			}
+		}
+		let name = &path[start..i];
+		i = space(i);
+		let mut j = i;
+		if b.get(j) == Some(&b':') {
+			j = space(j + 1);
+		}
+		let mut sel = Sel::None;
+		if b.get(j) == Some(&b'[') {
+			i = space(j + 1);
+			if matches!(b.get(i), Some(b'"' | b'\'')) {
+				i = quoted(i)?;
+				sel = Sel::Value;
+			} else {
+				let from = i;
+				while i < n && b[i] != b']' {
+					i += 1;
+				}
+				sel = selector_of(path[from..i].trim())?;
+			}
+			i = space(i);
+			if b.get(i) != Some(&b']') || star {
+				return None;
+			}
+			i += 1;
+		}
+		out.push(Segment {
+			name,
+			text: &path[start..i],
+			end: i,
+			star,
+			sel,
+		});
+		i = space(i);
+		match b.get(i) {
+			None => return Some(out),
+			Some(b'.') => i += 1,
+			Some(_) => return None,
+		}
+	}
+}
+
+fn selector_of(body: &str) -> Option<Sel> {
+	match body {
+		"" => return None,
+		"*" => return Some(Sel::All),
+		_ => {}
+	}
+	let digits = body.strip_prefix('#').unwrap_or(body);
+	let digits = digits.strip_prefix('+').unwrap_or(digits);
+	if !digits.is_empty() && digits.bytes().all(|c| c.is_ascii_digit()) {
+		if let Ok(k) = digits.parse() {
+			return Some(Sel::Index(k));
+		}
+	}
+	Some(Sel::Value)
+}
+
+fn bare_char(c: u8) -> bool {
+	c.is_ascii_alphanumeric() || c == b'-' || c == b'_'
 }
 
 const FORMAT_HEAD: &str = "##    Format   ";

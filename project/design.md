@@ -155,9 +155,11 @@ Go names are listed. Rust uses the same words in snake case, and `ShclDoc` has t
 | `d.Child(base, name)`           | `base` with one more name on the end, quoted if it needs it.
 | `d.Line(path)`                  | The line a single node is on.
 | `d.Lines(path)`                 | The line of each instance, in file order.
-| `d.First(path)`, `d.Last(path)` | `path` narrowed to its first or last instance in the file. With fewer than 2 it comes back as it is.
+| `d.First(path)`, `d.Last(path)` | `path` narrowed to its first or last instance in the file. With none it comes back as it is.
 
 - A `Node.Path` reads that instance and no other, whatever selector syntax the bound shcl uses. A program builds on it with `Child` and never writes a selector itself. `First` and `Last` give the same kind of path.
+	- Every step of the path that repeats gets an index, not only the last, so an edit takes the path too. For `tv.g` with `tv` written twice, the paths are like `tv(0).g` and `tv(1).g`.
+	- A wildcard like `a.*.b` lists each node it reaches, with its line. A slot that reaches no node, or several, is left out, as 3.0 reads it. So `Each` can list fewer than `Count` says. Plain reads of a wildcard path still differ by version, and the wrapper leaves them as they are.
 
 - `Each` lists instances in the order shcl keeps them, which isn't always the file's. A block written twice with the same name and value is one block, so `tv.f` in the second part comes after the first part's `tv.f`, even with another `tv` block between them. `Lines`, `First`, and `Last` go by line instead, which is the same on every version.
 	- An instance a put made has no line. `Lines` gives it as 0, and `First` and `Last` count it after the ones from the file.
@@ -176,7 +178,7 @@ Go names are listed. Rust uses the same words in snake case, and `ShclDoc` has t
 | `d.Put(path, v)`          | Sets an int, float, bool, string, or a slice of strings, ints, or floats.
 | `d.PutSyntax(path, text)` | Sets a value written in shcl's own syntax. The whole text has to read back, so one with a trailing comment is `NoReadBack`.
 | `d.Comment(path, text)`   | Sets the comment above a path.
-| `d.Remove(path)`          | Takes out a path and everything under it, and says how many instances went.
+| `d.Remove(path)`          | Takes out a path and everything under it, and says how many instances went. That's every instance, and also the ones under any step that repeats.
 
 - A Go `float32` or Rust `f32` is written as its own shortest digits, so 0.9 is written `0.9` and not as the float64 it widens to.
 
@@ -222,7 +224,7 @@ Each row has a test, either a shared case or an API test.
 | :---                                     | :---                                                               | :---
 | `Names` on a path with several instances | 1.2 and 2.0 give nothing. 3.0 lists every instance's children.     | Lists every instance's children, everywhere.
 | `Names` with a name given twice          | Lists it once per line.                                            | Lists it once.
-| `Put` on a path with several instances   | 1.2 and 2.0 set something and say ok. 3.0 refuses.                 | Refuses with `BadPath`, everywhere, and changes nothing. `PutSyntax` and `Comment` too.
+| An edit on a path with several instances | 1.2 and 2.0 edit the first one and say ok. 3.0 refuses.            | `Put`, `PutSyntax`, and `Comment` refuse with `BadPath`, everywhere, and change nothing. That's several at any step, like `tv.g` with `tv` twice, unless a selector picks one there.
 | A put that doesn't read back the same    | Says ok.                                                           | Reads every put back. A mismatch is `NoReadBack`, with the edit left in place.
 | `PutSyntax` text with a trailing comment | Drops the comment and says ok.                                     | `NoReadBack`, with the edit left in place.
 | `PutSyntax` of `[a, b]` on 1.2 and 2.0   | Sets `"[a", "b]"`, which a file line `k: [a, b]` doesn't mean.     | `NoReadBack`, with the edit left in place.
@@ -290,7 +292,7 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 
 - `cicd/fuzz.py` makes a document and an ops script from each seed, with a generator that knows each format's syntax. A quarter of the documents are mutated copies of the case documents instead.
 
-- Each case runs through the Go and Rust drivers on the same shcl version. The outputs must match byte for byte, neither may crash, and a put that says ok must read back the same. A float read that says `Good` must not give infinity or NaN. A `first` or `last` read must not say `Multiple`, and has to be on the first or last line `lines` gave for that path.
+- Each case runs through the Go and Rust drivers on the same shcl version. The outputs must match byte for byte, neither may crash, and a put that says ok must read back the same. A float read that says `Good` must not give infinity or NaN. A `first` or `last` read must not say `Multiple`, and has to be on the first or last line `lines` gave for that path. An edit that says ok must have found one instance at every step of its path that exists, counted just before it.
 
 - It runs for a wall-clock budget, and a failing seed is saved with its document, script, and both outputs. If too few reads find a value, the run fails, since a generator that stopped making readable documents would pass forever.
 
@@ -335,6 +337,14 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 - The first or last of a repeated key is picked by path, with `First(path)` and `Last(path)`, rather than by a mode on each read or a setting on the document. One pair covers all 8 types in both tiers, and the edits too, the same way `Each` paths do. A setting would change what every read means from somewhere else in the program. A plain read still says `Multiple`, so taking one is always asked for at the call.
 
 - `First` and `Last` go by line, the order the file was written in, since that's what "the last one wins" means to whoever wrote it. `Each` order differs from it for a block written in parts.
+
+- An edit is refused when any step of its path has several instances, not only the last, since that's where 3.0 refuses. In 1.2 and 2.0 every setter goes through one check that counts each step, and a test walks every edit on the `Doc` interface, so a new setter can't skip it.
+
+- `Remove` takes every instance, even where the path repeats at an inner step, on every version. It says how many went, so nothing is picked for the caller. The setters can't do that, since there's one value to set.
+
+- `Each` narrows every step that repeats, so its paths take edits too. `First` and `Last` give that path even for one instance, since a path as typed can repeat at an inner step and be refused.
+
+- `Each` on a wildcard lists the nodes it reaches, as 3.0's own field list does, rather than refusing wildcards. 1.2 and 2.0 build the same list from counts and child names.
 
 - `Lines` is its own call, rather than a field on `Got`, so a program that keeps the `Multiple` default can still name the lines in its warning, and a read costs nothing extra.
 

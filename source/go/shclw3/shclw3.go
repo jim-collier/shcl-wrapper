@@ -338,21 +338,17 @@ func (d *Doc) Line(path string) int  { return d.d.Line(path) }
 // Names lists the child names under path once each, in file order.
 func (d *Doc) Names(path string) []string { return shclw.DedupeNames(d.d.Children(path)) }
 
-// Each is every instance path names, each with a path that reads it alone.
+// Each is every instance path names, each with a path that reads and edits
+// it alone: 3.0's own instance path, with an index on every step that
+// repeats. A wildcard slot that reaches no node or several has none, and is
+// left out.
 func (d *Doc) Each(path string) []Node {
-	n := d.d.Count(path)
-	vals := d.d.Instances(path)
-	out := make([]Node, 0, n)
-	for i := 0; i < n; i++ {
-		p := path
-		if n > 1 {
-			p = fmt.Sprintf("%s(%d)", path, i)
+	fields := d.d.ReadFields(path).Value
+	out := make([]Node, 0, len(fields))
+	for _, f := range fields {
+		if f.Path != "" {
+			out = append(out, Node{Path: f.Path, Value: f.Value, Line: f.Line})
 		}
-		v := ""
-		if i < len(vals) {
-			v = vals[i]
-		}
-		out = append(out, Node{Path: p, Value: v, Line: d.d.Line(p)})
 	}
 	return out
 }
@@ -366,8 +362,8 @@ func (d *Doc) Child(base, name string) string {
 }
 
 // First is path narrowed to its first instance in the file, so a read or an
-// edit takes that one where it would say Multiple. A path with fewer than 2
-// instances comes back as it is.
+// edit takes that one where it would say Multiple. A path with no instances
+// comes back as it is.
 func (d *Doc) First(path string) string { return shclw.FirstOf(d, path) }
 
 // Last is First for the last instance in the file, the one that wins where

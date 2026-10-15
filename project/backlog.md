@@ -318,7 +318,7 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 - Put under a key with several instances writes into the first one on 1.2 and 2.0
 	- ID: 2026101515055152
 	- Type: Bug
-	- Status: Queued
+	- Status: Waiting on signoff
 	- Severity: Avg
 	- Opened: 20261015-150551
 	- Opened by: JC
@@ -329,7 +329,23 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Expected behavior: `BadPath`, as 3.0 says, and nothing changes.
 	- Reproduced: 20261015, on 1.2 and 2.0 in Go and on 1.2 in Rust. 3.0 says `BadPath`.
 	- Possible cause: The 1.2 and 2.0 adapters count the instances of the whole path, and `tv.g` has none yet. 3.0 refuses a path that matches more than one node at any step.
+	- Actual cause: The several-instances check counted the whole path only. 3.0 checks each step that exists, and refuses at the first one with several, even when only one of them has the rest, as with `tv.g` where only the first `tv` has a `g`. Put, PutSyntax, and Comment each called the check on their own, which is how Comment missed it before (2026101514071600).
+	- Progress log:
+		- 20261015: checked 3.0 for each edit, on inner and last steps, with the rest there and not. Put, PutSyntax, and Comment refuse at any step with several, and a selector that picks one there is fine. Remove takes every instance on every version.
+		- 20261015: this is the 4th item today on this one class, after 2026101513330007 and 2026101514071600.
+	- Decisions:
+		- One check in shared code counts each step of the path, and the 1.2 and 2.0 adapters reach shcl's setters only through one `set` call that runs it. A test reads the method list off the Go `Doc` interface and fails on any method not sorted as a read or an edit, and walks every edit over inner and last steps on every version.
+		- Remove still takes every instance, even under a step that repeats. It says how many went, so nothing is picked for the caller.
+		- `Each` narrows every step that repeats, so its paths take edits. `First` and `Last` give that path for a single instance too, since the path as typed can repeat at an inner step and be refused.
+		- design.md has these under Decisions, and the table row covers inner steps.
+	- Actual fix: Put, PutSyntax, and Comment on 1.2 and 2.0 go through one check that refuses with `BadPath` when any step has several instances, and change nothing. `Each`, `First`, and `Last` give paths with an index at each step that repeats, so they still take edits.
+	- Verified: the gate, and a 20 second fuzz with Go against Rust and no difference. Before the fix, the new case failed on all 3 versions in Go and Rust, the Go and Rust edit tests failed, and the new fuzz check failed. They all pass after.
+	- Branch: several
+	- Commit: 1c33f90
+	- Test case: tests/cases/020-several, Go `TestDocMethodsSorted`, `TestEditsRefuseSeveral`, `TestEditsOnOneInstance`, and `TestRemoveTakesAll` in edits_test.go, Rust `several` in tests/api.rs, and the fuzz check that an edit saying ok found one instance at every step.
 	- Sweep: Put, PutSyntax, and Comment in Go `shclw1` and `shclw2`, and Rust `v1` and `v2`.
+	- Swept: Put, PutSyntax, Comment, and Remove in Go `shclw1` to `shclw3` and Rust `v1` to `v3`, each on the first, an inner, and the last step of a path, with the rest there and not there. 3.0 needs no check of its own, since shcl 3.0 refuses these itself, and the test walks it too. Remove takes every instance on every version, as decided. No other `Doc` or `ShclDoc` method edits the document. `Write` and `UpgradeFile` take a file path, not a document path.
+	- Acceptance signoff: Waiting. `First` and `Last` now give a narrowed path for a single instance, which changes what design.md said.
 
 - Layered loading
 	- ID: 2026101512024156
@@ -645,7 +661,7 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 - Each on a wildcard path gives paths that don't read one instance
 	- ID: 2026101515055253
 	- Type: Bug
-	- Status: Queued
+	- Status: Waiting on signoff
 	- Severity: Low
 	- Opened: 20261015-150552
 	- Opened by: JC
@@ -656,6 +672,18 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Expected behavior: Each node's path reads that one node, and has its line. Or a wildcard path is refused.
 	- Reproduced: 20261015. The lines of 0 on 1.2 and 3.0 in Go and Rust, and the path reads in Go.
 	- Note: The wrapper's docs don't mention wildcards, and the fuzzer makes no wildcard paths.
+	- Actual cause: `Each` put an index on the end of the whole path, and an index on a wildcard path is refused on every version.
+	- Decisions:
+		- Each on a wildcard lists the nodes it reaches, each with a path that reads it alone and its line, rather than refusing wildcards. 3.0 does this itself with its field list, so the 3.0 adapter uses that. 1.2 and 2.0 build the same list from counts and child names.
+		- A wildcard slot that reaches no node, or several, is left out, as 3.0 has it. So `Each` can list fewer than `Count`.
+		- Plain reads and `Count` of a wildcard path still differ by version. The wrapper leaves those alone, and design.md says so.
+	- Actual fix: `Each` builds a path per node, with an index at every step that repeats and the wildcard filled in with the child's name. `Lines`, `First`, and `Last` get real lines and paths from it.
+	- Verified: the gate, and a 20 second fuzz with no difference. Before the fix the new case and the Go and Rust wildcard tests failed on every version, and the fuzz first and last check failed once wildcards were in its paths.
+	- Branch: several
+	- Commit: 1c33f90
+	- Test case: tests/cases/020-several, Go `TestEachWildcard`, Rust `several` in tests/api.rs, and the fuzz first and last check, which now makes wildcard paths.
+	- Swept: `Each` in Go `shclw1` to `shclw3` and Rust `v1` to `v3`, and what uses it: `Names` on 1.2 and 2.0, `Lines`, `First`, `Last`, and the `each` and `eachget` ops.
+	- Acceptance signoff: Waiting. Expanding wildcards rather than refusing them was a choice.
 
 - Commit and publish from cicd
 	- ID: 2026101512024171

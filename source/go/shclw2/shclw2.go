@@ -253,19 +253,15 @@ func (d *Doc) Names(path string) []string {
 	return shclw.DedupeNames(all)
 }
 
-// Each is every instance path names, each with a path that reads it alone.
+// Each is every instance path names, each with a path that reads and edits
+// it alone (shclw.EachPaths).
 func (d *Doc) Each(path string) []Node {
-	n := d.d.Count(path)
-	vals := d.d.Instances(path)
-	out := make([]Node, 0, n)
-	for i := 0; i < n; i++ {
-		p := path
-		if n > 1 {
-			p = fmt.Sprintf("%s[#%d]", path, i)
-		}
+	paths := shclw.EachPaths(d, d.d.Children, path)
+	out := make([]Node, 0, len(paths))
+	for _, p := range paths {
 		v := ""
-		if i < len(vals) {
-			v = vals[i]
+		if vals := d.d.Instances(p); len(vals) > 0 {
+			v = vals[0]
 		}
 		out = append(out, Node{Path: p, Value: v, Line: d.d.Line(p)})
 	}
@@ -281,8 +277,8 @@ func (d *Doc) Child(base, name string) string {
 }
 
 // First is path narrowed to its first instance in the file, so a read or an
-// edit takes that one where it would say Multiple. A path with fewer than 2
-// instances comes back as it is.
+// edit takes that one where it would say Multiple. A path with no instances
+// comes back as it is.
 func (d *Doc) First(path string) string { return shclw.FirstOf(d, path) }
 
 // Last is First for the last instance in the file, the one that wins where
@@ -301,27 +297,26 @@ func (d *Doc) Put(path string, v any) error {
 	if err != nil {
 		return err
 	}
-	if err := d.onlyOne(path); err != nil {
-		return err
-	}
-	var ok bool
-	switch val.Kind {
-	case shclw.KindInt:
-		ok = d.d.SetInt(path, val.Int)
-	case shclw.KindFloat:
-		ok = d.d.SetFloat(path, val.Float)
-	case shclw.KindBool:
-		ok = d.d.SetBool(path, val.Bool)
-	case shclw.KindStr:
-		ok = d.d.SetString(path, val.Str)
-	case shclw.KindStrs:
-		ok = d.d.SetStringArray(path, val.Strs)
-	case shclw.KindInts:
-		ok = d.d.SetIntArray(path, val.Ints)
-	case shclw.KindFloats:
-		ok = d.d.SetFloatArray(path, val.Floats)
-	}
-	if err := d.setErr(path, ok); err != nil {
+	err = d.set(path, func(sd *shcl.Document) bool {
+		switch val.Kind {
+		case shclw.KindInt:
+			return sd.SetInt(path, val.Int)
+		case shclw.KindFloat:
+			return sd.SetFloat(path, val.Float)
+		case shclw.KindBool:
+			return sd.SetBool(path, val.Bool)
+		case shclw.KindStr:
+			return sd.SetString(path, val.Str)
+		case shclw.KindStrs:
+			return sd.SetStringArray(path, val.Strs)
+		case shclw.KindInts:
+			return sd.SetIntArray(path, val.Ints)
+		case shclw.KindFloats:
+			return sd.SetFloatArray(path, val.Floats)
+		}
+		return false
+	})
+	if err != nil {
 		return err
 	}
 	return shclw.VerifyPut(d, path, val)
@@ -331,10 +326,7 @@ func (d *Doc) Put(path string, v any) error {
 // read back as typed, such as one with a trailing comment, is
 // ErrNoReadBack, with the edit left in place.
 func (d *Doc) PutSyntax(path, text string) error {
-	if err := d.onlyOne(path); err != nil {
-		return err
-	}
-	if err := d.setErr(path, d.d.SetLiteral(path, text)); err != nil {
+	if err := d.set(path, func(sd *shcl.Document) bool { return sd.SetLiteral(path, text) }); err != nil {
 		return err
 	}
 	alone := New()
@@ -345,23 +337,21 @@ func (d *Doc) PutSyntax(path, text string) error {
 
 // Comment sets the comment above path.
 func (d *Doc) Comment(path, text string) error {
-	if err := d.onlyOne(path); err != nil {
-		return err
-	}
-	return d.setErr(path, d.d.SetComment(path, text))
+	return d.set(path, func(sd *shcl.Document) bool { return sd.SetComment(path, text) })
 }
 
 // Remove takes out path and everything under it, and says how many
 // instances went.
 func (d *Doc) Remove(path string) int { return d.d.Remove(path) }
 
-// onlyOne refuses a path with several instances. shcl 2.0 would set the
-// first one and say ok, where 3.0 refuses.
-func (d *Doc) onlyOne(path string) error {
-	if d.d.Count(path) > 1 {
-		return &shclw.Error{Kind: shclw.ErrBadPath, Path: path, Msg: "Multiple"}
+// set is the one way an edit reaches the shcl document, so none can skip
+// the check that the path names one instance at every step. shcl 2.0
+// would edit the first one and say ok, where 3.0 refuses.
+func (d *Doc) set(path string, apply func(*shcl.Document) bool) error {
+	if err := shclw.OneTarget(d, path); err != nil {
+		return err
 	}
-	return nil
+	return d.setErr(path, apply(d.d))
 }
 
 func (d *Doc) setErr(path string, ok bool) error {

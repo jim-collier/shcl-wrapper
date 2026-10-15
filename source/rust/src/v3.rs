@@ -376,15 +376,19 @@ impl ShclDoc for Doc {
 		crate::dedupe_names(self.d.children(path))
 	}
 
+	/// 3.0's own instance paths, with an index on every step that repeats.
+	/// A wildcard slot that reaches no node or several has none, and is left
+	/// out.
 	fn each(&self, path: &str) -> Vec<Node> {
-		let n = self.d.count(path);
-		let vals = self.d.instances(path);
-		(0..n)
-			.map(|i| {
-				let p = if n > 1 { format!("{path}({i})") } else { path.to_owned() };
-				let value = vals.get(i).cloned().unwrap_or_default();
-				let line = self.d.line(&p);
-				Node { path: p, value, line }
+		self.d
+			.read_fields(path)
+			.value
+			.into_iter()
+			.filter(|f| !f.path.is_empty())
+			.map(|f| Node {
+				path: f.path,
+				value: f.value,
+				line: f.line,
 			})
 			.collect()
 	}

@@ -218,3 +218,79 @@ fn first_last() {
 	check_first_last::<shclw::v2::Version>(2);
 	check_first_last::<shclw::v3::Version>(3);
 }
+
+/// tv and u.v repeat at an inner step, n at the last one. Only one tv has a
+/// g, and only one v has a w.
+const SEVERAL: &str = "tv: one\n\tg: 1\ntv: two\nn: 1\nn: 2\nu:\n\tv: 1\n\tv: 2\n\t\tw: 1\n";
+
+type Edit<D> = fn(&mut D, &str) -> Result<(), shclw::Error>;
+
+/// Every edit on `ShclDoc`. Go's `TestDocMethodsSorted` fails on a new method
+/// until it's sorted, and the trait has the same set.
+fn edits<D: ShclDoc>() -> [(&'static str, Edit<D>); 3] {
+	[
+		("put", |d, p| d.put(p, 5)),
+		("put_syntax", |d, p| d.put_syntax(p, "6")),
+		("comment", |d, p| d.comment(p, "c")),
+	]
+}
+
+/// The lines of a and b between their common start and end.
+fn hunk(a: &str, b: &str) -> (usize, usize) {
+	let (x, y): (Vec<_>, Vec<_>) = (a.split('\n').collect(), b.split('\n').collect());
+	let start = x.iter().zip(&y).take_while(|(p, q)| p == q).count();
+	let end = x[start..]
+		.iter()
+		.rev()
+		.zip(y[start..].iter().rev())
+		.take_while(|(p, q)| p == q)
+		.count();
+	(x.len() - start - end, y.len() - start - end)
+}
+
+/// Every edit refuses a path that reaches several instances at any step, as
+/// 3.0 does, and changes nothing. A path from `each`, `first`, or `last`
+/// names one at every step, and an edit on it changes one place.
+fn check_several<L: Lib>(n: u32) {
+	for (name, edit) in edits::<L::Doc>() {
+		for p in ["n", "n.x", "tv", "tv.g", "tv.h", "tv.g.h", "u.v", "u.v.w", "u.v.w.x"] {
+			let mut d = L::parse(SEVERAL);
+			let was = d.text();
+			let e = edit(&mut d, p).expect_err(&format!("v{n} {name} {p}"));
+			assert_eq!(e.kind, ErrKind::BadPath, "v{n} {name} {p}");
+			assert_eq!(d.text(), was, "v{n} {name} {p}: changed");
+		}
+		let d = L::parse(SEVERAL);
+		let mut paths: Vec<String> = d.each("tv").iter().map(|t| d.child(&t.path, "h")).collect();
+		paths.extend(d.each("u.v").iter().map(|t| d.child(&t.path, "w")));
+		paths.extend(d.each("n").into_iter().map(|t| t.path));
+		paths.extend([d.first("tv.g"), d.last("u.v.w"), d.last("n")]);
+		for p in &paths {
+			let mut d = L::parse(SEVERAL);
+			let was = d.text();
+			edit(&mut d, p).unwrap_or_else(|e| panic!("v{n} {name} {p}: {e}"));
+			// A put adds or changes a line, and a comment on a new name adds 2.
+			let (gone, added) = hunk(&was, &d.text());
+			assert!(gone <= 1 && added <= 2, "v{n} {name} {p}: changed more than one place");
+		}
+	}
+	for p in ["n", "tv.g", "u.v", "u.v.w"] {
+		let mut d = L::parse(SEVERAL);
+		let want = d.count(p);
+		assert_eq!(d.remove(p), want, "v{n}: remove {p}");
+		assert!(!d.has(p), "v{n}: {p} left after remove");
+	}
+	let d = L::parse("a:\n\tx:\n\t\tb: 1\n\tz:\n\t\tb: 2\n\ty:\n\t\tc: 3\n\tx: again\n\t\tb: 4\n");
+	let nodes = d.each("a.*.b");
+	let lines: Vec<usize> = nodes.iter().map(|t| t.line).collect();
+	let vals: Vec<i64> = nodes.iter().map(|t| d.get_int(&t.path).value).collect();
+	assert_eq!((lines, vals), (vec![3, 5, 9], vec![1, 2, 4]), "v{n}: each of a.*.b");
+	assert_eq!(d.int(&d.last("a.*.b"), 0), 4, "v{n}: last of a.*.b");
+}
+
+#[test]
+fn several() {
+	check_several::<shclw::v1::Version>(1);
+	check_several::<shclw::v2::Version>(2);
+	check_several::<shclw::v3::Version>(3);
+}

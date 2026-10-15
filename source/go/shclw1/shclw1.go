@@ -262,6 +262,19 @@ func (d *Doc) Child(base, name string) string {
 	return base + "." + shcl.QuoteSegment(name)
 }
 
+// First is path narrowed to its first instance in the file, so a read or an
+// edit takes that one where it would say Multiple. A path with fewer than 2
+// instances comes back as it is.
+func (d *Doc) First(path string) string { return shclw.FirstOf(d, path) }
+
+// Last is First for the last instance in the file, the one that wins where
+// a later line overrides an earlier one.
+func (d *Doc) Last(path string) string { return shclw.LastOf(d, path) }
+
+// Lines is the line of each instance of path, in file order. An instance a
+// put made has none, and is a 0 at the end.
+func (d *Doc) Lines(path string) []int { return shclw.LinesOf(d, path) }
+
 // Put sets path to v. It takes ints, floats, bools, strings, and slices of
 // strings, ints, and floats. A value that doesn't read back the same is
 // ErrNoReadBack, with the edit left in place.

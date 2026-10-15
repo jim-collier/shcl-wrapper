@@ -9,6 +9,7 @@
 package shclw
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -234,6 +235,9 @@ type Doc interface {
 	Names(path string) []string
 	Each(path string) []Node
 	Line(path string) int
+	Lines(path string) []int
+	First(path string) string
+	Last(path string) string
 	Child(base, name string) string
 
 	Put(path string, v any) error
@@ -428,6 +432,48 @@ func DedupeNames(names []string) []string {
 		}
 		seen[k] = true
 		out = append(out, n)
+	}
+	return out
+}
+
+// InFileOrder is the instances of path sorted by line. Each goes in tree
+// order, which for a reopened block isn't the order of the file. An
+// instance a put made has no line, and goes after the rest in Each order.
+func InFileOrder(d Doc, path string) []Node {
+	nodes := d.Each(path)
+	key := func(n Node) int {
+		if n.Line == 0 {
+			return math.MaxInt
+		}
+		return n.Line
+	}
+	slices.SortStableFunc(nodes, func(a, b Node) int { return cmp.Compare(key(a), key(b)) })
+	return nodes
+}
+
+// FirstOf is path narrowed to its first instance in the file, or path as it
+// is when it names fewer than 2.
+func FirstOf(d Doc, path string) string {
+	if nodes := InFileOrder(d, path); len(nodes) > 1 {
+		return nodes[0].Path
+	}
+	return path
+}
+
+// LastOf is FirstOf for the last instance.
+func LastOf(d Doc, path string) string {
+	if nodes := InFileOrder(d, path); len(nodes) > 1 {
+		return nodes[len(nodes)-1].Path
+	}
+	return path
+}
+
+// LinesOf is the line of each instance of path, in file order.
+func LinesOf(d Doc, path string) []int {
+	nodes := InFileOrder(d, path)
+	out := make([]int, len(nodes))
+	for i, n := range nodes {
+		out[i] = n.Line
 	}
 	return out
 }

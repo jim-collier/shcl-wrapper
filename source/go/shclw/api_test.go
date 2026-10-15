@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -143,6 +144,45 @@ func TestRewritesNew(t *testing.T) {
 		loose, _ := v.lib.ParseWith("a:   1\n", shclw.Loose)
 		if got, want := loose.Rewrites(), v.n < 3; got != want {
 			t.Errorf("v%d: loose load of a text that isn't canonical: got %v, want %v", v.n, got, want)
+		}
+	}
+}
+
+// First and Last pick by line, so the fallback reads and an edit take that
+// instance alone. An instance a put made has no line and sorts last.
+func TestFirstLast(t *testing.T) {
+	for _, v := range libs {
+		d := v.lib.Parse("p: 1\ntv: a\n\tf: 1\ntv: b\n\tf: 2\ntv: a\n\tf: 3\np: 2\n")
+		if got := d.Int(d.Last("p"), 9); got != 2 {
+			t.Errorf("v%d: Int of last p: %d, want 2", v.n, got)
+		}
+		if got := d.Str(d.First("tv.f"), ""); got != "1" {
+			t.Errorf("v%d: Str of first tv.f: %q, want 1", v.n, got)
+		}
+		if got := d.Int(d.Last("tv.f"), 9); got != 3 {
+			t.Errorf("v%d: Int of last tv.f: %d, want 3", v.n, got)
+		}
+		if got := d.Int("p", 9); got != 9 {
+			t.Errorf("v%d: plain Int of p: %d, want the fallback", v.n, got)
+		}
+		if err := d.Put(d.Last("p"), 5); err != nil {
+			t.Fatalf("v%d: put on last p: %v", v.n, err)
+		}
+		if g, l := d.GetInt(d.First("p")), d.Lines("p"); g.Value != 1 || d.Int(d.Last("p"), 9) != 5 || !slices.Equal(l, []int{1, 8}) {
+			t.Errorf("v%d: after a put on last p: first %d, last %d, lines %v", v.n, g.Value, d.Int(d.Last("p"), 9), l)
+		}
+		tv := d.Each("tv")
+		if err := d.Put(d.Child(tv[1].Path, "g"), 2); err != nil {
+			t.Fatalf("v%d: %v", v.n, err)
+		}
+		if err := d.Put(d.Child(tv[0].Path, "g"), 1); err != nil {
+			t.Fatalf("v%d: %v", v.n, err)
+		}
+		if got, l := d.Int(d.Last("tv.g"), 9), d.Lines("tv.g"); got != 2 || !slices.Equal(l, []int{0, 0}) {
+			t.Errorf("v%d: two put instances: last %d, lines %v, want 2 and [0 0]", v.n, got, l)
+		}
+		if got := d.Last("nope"); got != "nope" {
+			t.Errorf("v%d: Last of a missing path: %q", v.n, got)
 		}
 	}
 }

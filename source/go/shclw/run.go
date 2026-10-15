@@ -87,6 +87,13 @@ func (r *runner) op(f []string) {
 		r.out(strconv.Itoa(d.Count(arg(1))))
 	case "line":
 		r.out(strconv.Itoa(d.Line(arg(1))))
+	case "lines":
+		lines := d.Lines(arg(1))
+		r.out(counted(len(lines), joinLines(lines)))
+	case "first":
+		r.out(r.get(arg(1), d.First(arg(2))))
+	case "last":
+		r.out(r.get(arg(1), d.Last(arg(2))))
 	case "names":
 		r.out(joinEsc(d.Names(arg(1))))
 	case "each":
@@ -467,6 +474,14 @@ func joinInts(v []int64) string {
 	out := make([]string, len(v))
 	for i, n := range v {
 		out[i] = strconv.FormatInt(n, 10)
+	}
+	return strings.Join(out, "\t")
+}
+
+func joinLines(v []int) string {
+	out := make([]string, len(v))
+	for i, n := range v {
+		out[i] = strconv.Itoa(n)
 	}
 	return strings.Join(out, "\t")
 }

@@ -115,6 +115,31 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- 20261015: 15,000 fuzz cases in 90 seconds, Go against Rust, with no difference left.
 	- Branch: go-rust
 
+- UpgradeFile puts the old file back when the write fails
+	- ID: 2026101513330005
+	- Type: Feature
+	- Status: Waiting on signoff
+	- Priority: High
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Requirements:
+		- The original survives any failure.
+		- Before replacing the file, check that it hasn't changed since it was read.
+	- Note: Radixmill, Quillroute, Mossrealm, and Cobblevale each do this themselves. Check what shcl's own UpgradeFile already does first.
+	- Progress log:
+		- 20261015: shcl's own UpgradeFile, at the pinned 3.0 commit, already writes through a temp file and a rename, makes the backup with an exclusive create, checks once that the file hasn't changed, before the backup, and removes the backup when a failed write left the original. It doesn't check again before the replace, or put the original back when a failed replace leaves nothing at the path.
+		- 20261015: the wrapper read the file for its 2.0 check, then shcl read it again to convert it. An edit in between was converted with no check. Reproduced in Go and Rust with a file flipping between a clean 2.x text and one 2.0 has errors on: the refused text was converted within a few rounds.
+	- Decisions:
+		- The 3.0 `UpgradeFile` reads once and does its own backup and write with shcl's parts, in place of calling shcl's `UpgradeFile`.
+		- A changed file is `ErrIO`, as shcl reports it, and not a new error kind. design.md has both under Decisions.
+	- Done: The file is read once, and the 2.0 check, the conversion, and the backup use that text. It's checked for changes before the backup and again before the write. A failed write leaves the original, or moves the backup back when nothing is left at the path, and the backup is removed unless it's all there is. A newer file is now `ErrTooNew`, where it used to pass as current, and a path that isn't a regular file is `ErrIO`. The check and restore are a shared helper that 2026101513330017 and 2026101513330019 can use.
+	- Verified: the gate, and a 20 second fuzz with Go against Rust and no difference. With all cores loaded, Go's edit-while-upgrading test passed 3 times and Rust's once.
+	- Branch: upgrade-file
+	- Commit: efcf6b5
+	- Test case: Go `TestUpgradeFileEditedMeanwhile` and `TestReplaceRead`, Rust `upgrade_file_edited_meanwhile` and `replace_read_*` in tests/files.rs. The edit-while-upgrading test failed before the fix in Go and Rust, and passes after.
+	- Swept: `UpgradeFile` in Go `shclw1` to `shclw3` and Rust `v1` to `v3`. 1.2 and 2.0 read once and never write. No other call reads a file and then writes it.
+	- Acceptance signoff: Waiting. It changes what an upgrade writes and when it gives up, and a changed file could have its own error kind instead of `ErrIO`.
+
 - PutSyntax doesn't read its value back
 	- ID: 2026101513330007
 	- Type: Bug
@@ -250,18 +275,6 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- A way to list the other instances' lines, for a "set more than once" warning.
 	- Note: Tallowbase takes the first. Quillroute takes the last and lists the rest as ignored. Folderkite falls back to the default with a warning. Wovenshell, Radixmill, and Tickerwren report the key as set twice.
 
-- UpgradeFile puts the old file back when the write fails
-	- ID: 2026101513330005
-	- Type: Feature
-	- Status: Queued
-	- Priority: High
-	- Opened: 20261015-133300
-	- Opened by: JC
-	- Requirements:
-		- The original survives any failure.
-		- Before replacing the file, check that it hasn't changed since it was read.
-	- Note: Radixmill, Quillroute, Mossrealm, and Cobblevale each do this themselves. Check what shcl's own UpgradeFile already does first.
-
 - C: copy reads out and free shcl's read memory
 	- ID: 2026101513330046
 	- Type: Feature
@@ -315,16 +328,6 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- Cobblevale and Folderkite wait on the C wrapper, and Lenscart on the Python one.
 		- The wrapper already covers some of their workarounds, which can go as each one moves: Tallowbase's path cursor and index walks, Quillroute's name dedupe, quoting names made of digits, refusing a set on a repeated key, reading every put back, and failing a load on any error.
 		- Each project's other workarounds have their own items, with the project named in the item.
-
-- Tests for upgrade and save failures
-	- ID: 2026101512024169
-	- Type: Task
-	- Status: Queued
-	- Priority: Avg
-	- Opened: 2026-10-15
-	- Opened by: JC
-	- Requirements:
-		- A refused save, a taken backup name, and an upgrade of a real file, on each version that has them.
 
 - Report blocks that shcl merged because they share a name
 	- ID: 2026101513330009
@@ -798,6 +801,23 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Swept: Go `Normalize` is the only float32 path. Rust has only `From<f32>`. Neither takes a float32 slice.
 	- Closed: 20261015-140716
 	- Acceptance signoff: Self-closed: did what the item asked, and its test failed before and passes after.
+
+- Tests for upgrade and save failures
+	- ID: 2026101512024169
+	- Type: Task
+	- Status: Done
+	- Priority: Avg
+	- Opened: 2026-10-15
+	- Opened by: JC
+	- Requirements:
+		- A refused save, a taken backup name, and an upgrade of a real file, on each version that has them.
+	- Done: A refused save is tested both ways. A save the folder won't take is `ErrIO` on 1.2, 2.0, and 3.0, and so is an upgrade there, with no backup left. A save that would drop lines is `ErrRefused` on 2.0 and 3.0, over the file it came from, which stays as it was. 1.2 saves it and loses the line. A taken backup name and a real upgrade, with the backup and the file mode checked, are 3.0 only, since 1.2 and 2.0 never write. Their `UpgradeFile` is tested to leave a file alone.
+	- Verified: the gate. The read-only folder refused the writes here, so those tests ran and didn't skip.
+	- Branch: upgrade-file
+	- Commit: efcf6b5
+	- Test case: tests/cases/016-write-refused, Go `TestSaveRefusedByFolder`, `TestSaveRefusedOverFile`, `TestUpgradeBackupTaken`, and `TestUpgradeRealFile`, Rust `save_refused_by_folder`, `save_refused_over_file`, `upgrade_backup_taken`, and `upgrade_real_file`.
+	- Acceptance signoff: Self-closed: tests only, and "refused save" is covered under both readings.
+	- Closed: 20261015-144411
 
 - Make the repo public
 	- ID: 2026101512024148

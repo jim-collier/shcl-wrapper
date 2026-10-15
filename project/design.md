@@ -168,6 +168,10 @@ Go names are listed. Rust uses the same words in snake case, and `ShclDoc` has t
 	- With `from` 0 the Format line decides, and a file with none is taken as current.
 	- `from` 2 says the file is known to be from shcl 2.x or older. The file can't say so itself, so only the program can.
 	- `UpgradeFile` copies the original beside it first, and `Backup` names the copy.
+	- `UpgradeFile` reads the file once. The 2.0 check, the conversion, and the backup all use that text.
+	- A file that changed since that read is left alone with `ErrIO`. It's checked before the backup and again right before the write. That's a check and not a lock, so an edit in the moment between the last check and the rename is still lost.
+	- The new text goes to a temp file that's renamed into place, so a failed write leaves the original. If a failed replace left nothing at the path, the backup is moved back. The backup is removed whenever the original is still there, and only kept, and named in the error, when it can't be put back.
+	- A file whose Format line names a newer format is `ErrTooNew`, as `Upgrade` says, and anything that isn't a regular file is `ErrIO`.
 	- A file taken as 2.x that shcl 2.0 reports errors on is `ErrRefused`, with those errors in the error's `Diags`. Nothing is written and no backup is made. 2.0 read such a line the way it repaired it, or not at all, and a raw block that never closes took the rest of the file. The upgrade would make a clean file out of it that means something else.
 	- That check needs shcl 2.0, so the 3.0 adapter builds it in too. In Rust the `shcl3` feature turns on `shcl2`.
 	- 1.2 and 2.0 have nothing to upgrade. They hand the text back, or refuse a newer file with `ErrTooNew`.
@@ -293,6 +297,10 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 - A put of infinity or NaN is refused with `BadValue` in every version, as 3.0 does. Writing one and then saying `NoReadBack` was the other choice, but it leaves a value in the file that no read takes.
 
 - An upgrade refuses a 2.x file that shcl 2.0 reports errors on, rather than count those lines in `Unsure`. A count is easy to skip over, and the upgraded file loads clean, so nothing would point at those lines again. It's the same answer shcl's own `migrate` gives a raw block that never closes.
+
+- `UpgradeFile` on 3.0 does its own read, backup, and write with shcl's parts, rather than call shcl's `UpgradeFile`. shcl's reads the file again after the wrapper's 2.0 check, so an edit in between was converted with no check.
+
+- A file that changed under `UpgradeFile` is `ErrIO`, as shcl reports it, rather than a kind of its own.
 
 - MIT, since programs copy this code into themselves.
 

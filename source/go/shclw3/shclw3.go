@@ -11,6 +11,7 @@ package shclw3
 import (
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/jim-collier/shclwrap/source/go/shclw"
 	"github.com/jim-collier/shclwrap/source/go/shclw2"
@@ -146,39 +147,56 @@ func Upgrade(text string, from int) (Upgraded, error) {
 }
 
 // UpgradeFile is Upgrade on a file. When it changes the file it first
-// copies the original beside it, and Backup names the copy.
+// copies the original beside it, and Backup names the copy. A file that
+// changed after it was read is left alone, and a failed write leaves the
+// original in place (shclw.ReplaceRead).
 func UpgradeFile(path string, from int) (Upgraded, error) {
 	if from > FormatMajor {
 		return Upgraded{From: from}, tooNew(path, from)
 	}
-	fromV2 := from > 0 && from < FormatMajor
-	// shcl writes the file itself, so this has to come first. A file that
-	// won't read gets shcl's own error below.
-	if text, err := shclw.ReadText(path); err == nil {
-		u := shcl.Upgrade(text, fromV2)
-		if err := oldErrors(text, fromV2, u); err != nil {
-			err.Path = path
-			return Upgraded{From: u.Format}, err
+	// A FIFO would block the read, and the write would put a file in place
+	// of a device.
+	if st, err := os.Stat(path); err == nil && !st.Mode().IsRegular() {
+		return Upgraded{}, &shclw.Error{Kind: shclw.ErrIO, Path: path, Msg: "not a regular file"}
+	}
+	// One read for the 2.0 check, the conversion, and the backup. shcl's own
+	// UpgradeFile would read the file a second time, after the check.
+	text, err := shclw.ReadText(path)
+	if err != nil {
+		return Upgraded{}, err
+	}
+	u, err := Upgrade(text, from)
+	if err != nil {
+		if e, ok := err.(*shclw.Error); ok {
+			e.Path = path
 		}
+		return Upgraded{From: u.From}, err
 	}
-	u, err := shcl.UpgradeFile(path, fromV2)
-	out := upgraded(u)
-	if err == nil {
-		return out, nil
+	if !u.Changed {
+		return u, nil
 	}
-	e := &shclw.Error{Kind: shclw.ErrIO, Path: path, Err: err}
-	var ue *shcl.UpgradeError
-	if errors.As(err, &ue) {
-		switch ue.Kind {
-		case shcl.UpgradeNotFound:
-			e.Kind = shclw.ErrNotFound
-		case shcl.UpgradeAmbiguous:
-			e.Kind = shclw.ErrAmbiguous
-		case shcl.UpgradeBackupTaken:
+	backup := func() (string, error) {
+		name, err := shcl.WriteBackup(path, text, u.From)
+		if err == nil {
+			return name, nil
+		}
+		e := &shclw.Error{Kind: shclw.ErrIO, Path: path, Err: err}
+		var ue *shcl.UpgradeError
+		if errors.As(err, &ue) && ue.Kind == shcl.UpgradeBackupTaken {
 			e.Kind = shclw.ErrBackupTaken
 		}
+		return "", e
 	}
-	return out, e
+	write := func(path, data string) error {
+		if err := shcl.WriteFileAtomic(path, data); err != nil {
+			return &shclw.Error{Kind: shclw.ErrIO, Path: path, Err: err}
+		}
+		return nil
+	}
+	if u.Backup, err = shclw.ReplaceRead(path, text, u.Text, backup, write); err != nil {
+		return Upgraded{From: u.From}, err
+	}
+	return u, nil
 }
 
 // oldErrors refuses a file taken as 2.x that shcl 2.0 reports errors on.

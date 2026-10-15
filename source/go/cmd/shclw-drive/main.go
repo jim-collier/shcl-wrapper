@@ -17,10 +17,10 @@ import (
 	"os"
 	"unicode/utf8"
 
-	"github.com/jim-collier/shcl-wrapper/source/go/shclw"
-	"github.com/jim-collier/shcl-wrapper/source/go/shclw1"
-	"github.com/jim-collier/shcl-wrapper/source/go/shclw2"
-	"github.com/jim-collier/shcl-wrapper/source/go/shclw3"
+	"github.com/jim-collier/shclwrap/source/go/shclw"
+	"github.com/jim-collier/shclwrap/source/go/shclw1"
+	"github.com/jim-collier/shclwrap/source/go/shclw2"
+	"github.com/jim-collier/shclwrap/source/go/shclw3"
 )
 
 var libs = map[string]shclw.Lib{"1": shclw1.Lib, "2": shclw2.Lib, "3": shclw3.Lib}

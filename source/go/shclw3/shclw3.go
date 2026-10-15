@@ -12,7 +12,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jim-collier/shcl-wrapper/source/go/shclw"
+	"github.com/jim-collier/shclwrap/source/go/shclw"
 	shcl "github.com/yottacore/shcl/source/go/v2"
 )
 

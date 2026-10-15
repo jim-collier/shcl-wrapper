@@ -11,10 +11,10 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/jim-collier/shcl-wrapper/source/go/shclw"
-	"github.com/jim-collier/shcl-wrapper/source/go/shclw1"
-	"github.com/jim-collier/shcl-wrapper/source/go/shclw2"
-	"github.com/jim-collier/shcl-wrapper/source/go/shclw3"
+	"github.com/jim-collier/shclwrap/source/go/shclw"
+	"github.com/jim-collier/shclwrap/source/go/shclw1"
+	"github.com/jim-collier/shclwrap/source/go/shclw2"
+	"github.com/jim-collier/shclwrap/source/go/shclw3"
 )
 
 var libs = []struct {

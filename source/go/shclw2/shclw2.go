@@ -12,8 +12,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jim-collier/shcl-wrapper/source/go/shclw"
 	shcl "github.com/jim-collier/shcl/source/go/v2"
+	"github.com/jim-collier/shclwrap/source/go/shclw"
 )
 
 // ShclVersion is the shcl release this package wraps.

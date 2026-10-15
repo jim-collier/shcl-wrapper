@@ -76,7 +76,7 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 - Rename the project shclwrap
 	- ID: 2026101513524769
 	- Type: Task
-	- Status: Queued
+	- Status: Done
 	- Priority: Critical
 	- Opened: 20261015-135247
 	- Opened by: JC
@@ -86,6 +86,15 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- The Go packages, the Rust crate, the drivers, and the `SHCLW_` variables stay `shclw`.
 		- The contact address moves to the new name.
 		- The local project folders get renamed by hand, outside the repo.
+	- Progress log:
+		- 20261015: the name is shclwrap in the docs, the cicd output, and the contact address. The Go module path is `github.com/jim-collier/shclwrap/source/go`, with every import moved.
+		- 20261015: the GitHub repo itself still has the old name. It gets renamed after the merge.
+	- Branch: shclwrap
+	- Commit: COMMIT_TBD
+	- Test case: none of its own, since it's a rename. The cicd gate passes on the renamed module.
+	- Swept: `git grep -iE 'shcl-wrapper|shcl_wrapper'` finds nothing.
+	- Closed: 20261015-135423
+	- Acceptance signoff: Self-closed: mechanical rename.
 
 - Upgrade passes along a conversion that stopped partway
 	- ID: 2026101513330001

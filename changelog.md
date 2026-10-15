@@ -25,3 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Ops scripts, a text form of reads and edits, through `shclw.Run` and `shclw::run`.
 
 - A pipeline with shared test cases for both languages, and fuzzing of Go against Rust.
+
+### Changed
+
+- The project is now named shclwrap, and the Go module path is `github.com/jim-collier/shclwrap/source/go`.

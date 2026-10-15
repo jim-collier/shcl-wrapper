@@ -13,11 +13,11 @@ That said, asking is free - and we'd prefer to say yes. Forks that credibly carr
 
 ## 1. Marks covered
 
-"shcl-wrapper", the shcl-wrapper logo, and any stylized variants (the "Marks") are trademarks of Jim Collier [ID: 2უNაɘ«҂թȹɤξπ๙¿ձϖ]. We claim these Marks under common law and use them in commerce as shcl-wrapper™.
+"shclwrap", the shclwrap logo, and any stylized variants (the "Marks") are trademarks of Jim Collier [ID: 2უNაɘ«҂թȹɤξπ๙¿ձϖ]. We claim these Marks under common law and use them in commerce as shclwrap™.
 
 ## 2. Relationship to the software license
 
-shcl-wrapper is distributed under MIT. That license grants rights in **copyright** only. It does not grant, and must not be read as granting, any
+shclwrap is distributed under MIT. That license grants rights in **copyright** only. It does not grant, and must not be read as granting, any
 license or right to use the Marks. Trademark rights are expressly reserved.
 
 ## 3. Uses that are always permitted
@@ -26,7 +26,7 @@ No permission from us is needed to:
 
 - Use the Marks in plain text to refer accurately to this project - in documentation, articles, reviews, talks, comparisons, or academic work.
 
-- State factually that your product works with, is built on, is compatible with, or is derived from shcl-wrapper (e.g. "Foo, a shcl-wrapper fork", "powered by shcl-wrapper"), provided the statement is true and your own name is the prominent one.
+- State factually that your product works with, is built on, is compatible with, or is derived from shclwrap (e.g. "Foo, a shclwrap fork", "powered by shclwrap"), provided the statement is true and your own name is the prominent one.
 
 - Redistribute unmodified official builds under the project name.
 
@@ -36,7 +36,7 @@ No permission from us is needed to:
 
 ## 4. Uses that require written permission
 
-- Naming your product, service, company, or app the same as, or confusingly similar to, the Marks - including as a prefix, suffix, or misspelling (e.g. "shcl-wrapper Pro", "shcl-wrapper Cloud", "shcl-wrapperify").
+- Naming your product, service, company, or app the same as, or confusingly similar to, the Marks - including as a prefix, suffix, or misspelling (e.g. "shclwrap Pro", "shclwrap Cloud", "shclwrapify").
 
 - Using the Marks in a domain name, social media handle, or app store listing title.
 
@@ -48,7 +48,7 @@ No permission from us is needed to:
 
 ## 5. Modified versions
 
-If you distribute a modified version, you must remove or replace the Marks in the name, logo, and user-facing branding. You may - and we encourage you to - state plainly that your version is derived from shcl-wrapper. Do not use the Marks in a way that could lead users to attribute your changes to us.
+If you distribute a modified version, you must remove or replace the Marks in the name, logo, and user-facing branding. You may - and we encourage you to - state plainly that your version is derived from shclwrap. Do not use the Marks in a way that could lead users to attribute your changes to us.
 
 ## 6. Usage requirements
 
@@ -58,11 +58,11 @@ When using the Marks under Section 3:
 
 - Do not alter the logo's colors, proportions, or elements.
 
-- Include an attribution such as: "shcl-wrapper is a trademark of Jim Collier."
+- Include an attribution such as: "shclwrap is a trademark of Jim Collier."
 
 ## 7. Enforcement and changes
 
-**We may revoke permission for any use that damages the Marks or misleads users**. We may revise this policy at any time; the current version lives at <https://github.com/jim-collier/shcl-wrapper/blob/main/trademark.md>. Requests for permission, and reports of misuse, go to shcl-wrapperⒶyottacore.com.
+**We may revoke permission for any use that damages the Marks or misleads users**. We may revise this policy at any time; the current version lives at <https://github.com/jim-collier/shclwrap/blob/main/trademark.md>. Requests for permission, and reports of misuse, go to shclwrapⒶyottacore.com.
 
 ---
 

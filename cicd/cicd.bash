@@ -97,7 +97,7 @@ gfs_rotate "${logDir}" run log >/dev/null 2>&1 || true
 
 if ((! doQuiet)); then
 	fEcho_Clean
-	fEcho_Clean "shcl-wrapper local CI/CD"
+	fEcho_Clean "shclwrap local CI/CD"
 	fEcho_Clean
 	fEcho_Clean "Repo root ....: ${root}"
 	fEcho_Clean "Mode .........: $( ((doGate)) && echo 'gate (format check, lint, tests)' || echo 'full')"
@@ -199,7 +199,7 @@ fi
 
 fEcho_Clean
 fEcho_Clean "${_letterbox}"
-fEcho "shcl-wrapper CI/CD: done."
+fEcho "shclwrap CI/CD: done."
 fEcho_Clean
 
 

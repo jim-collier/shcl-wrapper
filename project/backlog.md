@@ -165,6 +165,34 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Test case: tests/cases 017-rewrites and 018-rewrites-canonical, Go `TestRewritesNew`, Rust `rewrites_new` in tests/api.rs.
 	- Swept: `Write`, `Text`, and `New` in Go `shclw1` to `shclw3` and Rust `v1` to `v3`, both ops runners, and fuzz.py's op list. `UpgradeFile` writes text it made itself, not a document, so it has no fallback to report.
 
+- Pick the first or last of a repeated key
+	- ID: 2026101513330004
+	- Type: Feature
+	- Status: Waiting on signoff
+	- Priority: High
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Related IDs: 2026101513330036, 2026101513330034, 2026101515055152, 2026101515055253
+	- Requirements:
+		- A read option that takes the first or the last instance, in place of `Multiple`.
+		- A way to list the other instances' lines, for a "set more than once" warning.
+	- Note: Tallowbase takes the first. Quillroute takes the last and lists the rest as ignored. Folderkite falls back to the default with a warning. Wovenshell, Radixmill, and Tickerwren report the key as set twice.
+	- Progress log:
+		- 20261015: repeated keys checked on 1.2, 2.0, and 3.0 first. `Each` order, each instance's line, blocks merged by name and value, and the lines after a put or a remove came out the same on every version. `Each` order isn't file order for a block written in parts, so `tv.f` can list lines 8, 12, 10.
+		- 20261015: 2 bugs found on the way, logged as 2026101515055152 and 2026101515055253.
+	- Decisions:
+		- `First(path)` and `Last(path)` narrow a path to one instance, so every typed read in both tiers takes it, and so do the edits. Go `d.Int(d.Last("port"), 8080)`, Rust `d.int(&d.last("port"), 8080)`.
+		- `Lines(path)` lists every instance's line in file order, so the others are all but the first or the last. A plain read still says `Multiple`.
+		- First and last go by line, not `Each` order. An instance a put made has no line, and counts as after the rest.
+		- design.md has these under Reads, Walking a document, and Decisions.
+	- Done: `First`, `Last`, and `Lines` in Go and Rust on all 3 versions, `first`, `last`, and `lines` ops, and a fuzz check that a `first` or `last` read is one instance, on the first or last of the path's lines.
+	- Verified: the gate and a 20 second fuzz pass, Go against Rust, with no difference. With the sort by line taken out, the new case failed in Go and Rust, and so did both API tests. With `Last` giving back the path, or the first instance, the fuzz check failed.
+	- Branch: first-last
+	- Commit: 08e831b
+	- Test case: tests/cases/019-first-last, Go `TestFirstLast`, Rust `first_last` in tests/api.rs, and the fuzz check.
+	- Swept: Go `shclw1` to `shclw3` each have the 3 calls, held to it by the `shclw.Doc` interface. Rust has them once, on the `ShclDoc` trait. Both ops runners and fuzz.py's op list have the new ops.
+	- Acceptance signoff: Waiting. It adds API, and the names and the order by line are a choice.
+
 - PutSyntax doesn't read its value back
 	- ID: 2026101513330007
 	- Type: Bug
@@ -277,18 +305,6 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Notes:
 		- 4 keeps every line as typed, so Text and Write get simpler. Its read-back check in setters can replace the wrapper's.
 
-- Pick the first or last of a repeated key
-	- ID: 2026101513330004
-	- Type: Feature
-	- Status: Queued
-	- Priority: High
-	- Opened: 20261015-133300
-	- Opened by: JC
-	- Requirements:
-		- A read option that takes the first or the last instance, in place of `Multiple`.
-		- A way to list the other instances' lines, for a "set more than once" warning.
-	- Note: Tallowbase takes the first. Quillroute takes the last and lists the rest as ignored. Folderkite falls back to the default with a warning. Wovenshell, Radixmill, and Tickerwren report the key as set twice.
-
 - C: copy reads out and free shcl's read memory
 	- ID: 2026101513330046
 	- Type: Feature
@@ -298,6 +314,22 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Opened by: JC
 	- Parent ID: 2026101512024159
 	- Note: shcl keeps every string read until the document is freed. Folderkite saw 19 MB after 200,000 reads, so it releases reads after each one and compacts after a save.
+
+- Put under a key with several instances writes into the first one on 1.2 and 2.0
+	- ID: 2026101515055152
+	- Type: Bug
+	- Status: Queued
+	- Severity: Avg
+	- Opened: 20261015-150551
+	- Opened by: JC
+	- Related IDs: 2026101514071600
+	- Steps to reproduce:
+		- Put `tv.g` in a file with `tv: one` and `tv: two`, on 1.2 or 2.0.
+	- Incorrect behavior: It says ok and adds `g` under the first `tv`.
+	- Expected behavior: `BadPath`, as 3.0 says, and nothing changes.
+	- Reproduced: 20261015, on 1.2 and 2.0 in Go and on 1.2 in Rust. 3.0 says `BadPath`.
+	- Possible cause: The 1.2 and 2.0 adapters count the instances of the whole path, and `tv.g` has none yet. 3.0 refuses a path that matches more than one node at any step.
+	- Sweep: Put, PutSyntax, and Comment in Go `shclw1` and `shclw2`, and Rust `v1` and `v2`.
 
 - Layered loading
 	- ID: 2026101512024156
@@ -609,6 +641,21 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Opened by: JC
 	- Parent ID: 2026101512024159
 	- Note: Cobblevale compiles shcl in one file with `SHCL_NO_FILE_IO`, since the file calls pull in `windows.h`, adn writes files itself. Write would need its own code for that build.
+
+- Each on a wildcard path gives paths that don't read one instance
+	- ID: 2026101515055253
+	- Type: Bug
+	- Status: Queued
+	- Severity: Low
+	- Opened: 20261015-150552
+	- Opened by: JC
+	- Related IDs: 2026101513330004
+	- Steps to reproduce:
+		- `Each("a.*.b")` on an `a:` block with `x:` and `z:` under it, each with a `b`.
+	- Incorrect behavior: Every node's line is 0, and its path reads as `Multiple`. `Lines`, `First`, and `Last` get the same.
+	- Expected behavior: Each node's path reads that one node, and has its line. Or a wildcard path is refused.
+	- Reproduced: 20261015. The lines of 0 on 1.2 and 3.0 in Go and Rust, and the path reads in Go.
+	- Note: The wrapper's docs don't mention wildcards, and the fuzzer makes no wildcard paths.
 
 - Commit and publish from cicd
 	- ID: 2026101512024171

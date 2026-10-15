@@ -126,6 +126,8 @@ Go names are listed. Rust uses the same words in snake case, and `ShclDoc` has t
 
 - Statuses: `Good`, `Empty`, `NotFound`, `BadType`, `Multiple`, and `BadPath`. 1.2 and 2.0 have no `BadPath` and say `NotFound`.
 
+- A float read never gives infinity or NaN. A value like `1e400` is `BadType`, and the fallback read gives the fallback.
+
 ### Walking a document
 
 | Call                  | Does
@@ -150,9 +152,13 @@ Go names are listed. Rust uses the same words in snake case, and `ShclDoc` has t
 | Call                      | Does
 | :---                      | :---
 | `d.Put(path, v)`          | Sets an int, float, bool, string, or a slice of strings, ints, or floats.
-| `d.PutSyntax(path, text)` | Sets a value written in shcl's own syntax.
+| `d.PutSyntax(path, text)` | Sets a value written in shcl's own syntax. The whole text has to read back, so one with a trailing comment is `NoReadBack`.
 | `d.Comment(path, text)`   | Sets the comment above a path.
 | `d.Remove(path)`          | Takes out a path and everything under it, and says how many instances went.
+
+- A Go `float32` or Rust `f32` is written as its own shortest digits, so 0.9 is written `0.9` and not as the float64 it widens to.
+
+- Infinity and NaN are refused with `BadValue`, and nothing changes, since no read would take them back.
 
 ### Format and upgrade
 
@@ -184,17 +190,23 @@ Go names are listed. Rust uses the same words in snake case, and `ShclDoc` has t
 
 Each row has a test, either a shared case or an API test.
 
-| Behavior                                 | shcl did                                                       | The wrapper does
-| :---                                     | :---                                                           | :---
-| `Names` on a path with several instances | 1.2 and 2.0 give nothing. 3.0 lists every instance's children. | Lists every instance's children, everywhere.
-| `Names` with a name given twice          | Lists it once per line.                                        | Lists it once.
-| `Put` on a path with several instances   | 1.2 and 2.0 set something and say ok. 3.0 refuses.             | Refuses with `BadPath`, everywhere, and changes nothing.
-| A put that doesn't read back the same    | Says ok.                                                       | Reads every put back. A mismatch is `NoReadBack`, with the edit left in place.
-| Opening a newer format's file            | 1.2 and 2.0 read it, wrongly.                                  | `ErrTooNew`.
-| A file that isn't UTF-8                  | Varies by language.                                            | `ErrIO`, everywhere.
-| Walking repeated entries                 | Selector syntax differs by version.                            | `Each` gives paths, and `Child` extends them.
-| Saving in 1.2                            | No save call.                                                  | `Write` saves atomically.
-| Rust 1.2 fallback reads                  | No `get_*_or`.                                                 | `int(path, fallback)` and the rest, as in every other version.
+| Behavior                                 | shcl did                                                           | The wrapper does
+| :---                                     | :---                                                               | :---
+| `Names` on a path with several instances | 1.2 and 2.0 give nothing. 3.0 lists every instance's children.     | Lists every instance's children, everywhere.
+| `Names` with a name given twice          | Lists it once per line.                                            | Lists it once.
+| `Put` on a path with several instances   | 1.2 and 2.0 set something and say ok. 3.0 refuses.                 | Refuses with `BadPath`, everywhere, and changes nothing. `PutSyntax` too.
+| A put that doesn't read back the same    | Says ok.                                                           | Reads every put back. A mismatch is `NoReadBack`, with the edit left in place.
+| `PutSyntax` text with a trailing comment | Drops the comment and says ok.                                     | `NoReadBack`, with the edit left in place.
+| `PutSyntax` of `[a, b]` on 1.2 and 2.0   | Sets `"[a", "b]"`, which a file line `k: [a, b]` doesn't mean.     | `NoReadBack`, with the edit left in place.
+| A float like `1e400` in the file         | 1.2 and 2.0 read infinity as `Good`. 3.0 says `BadType`.           | `BadType`, everywhere. An array keeps its length, with 0 for the bad items, as in 3.0.
+| A put of infinity or NaN                 | 1.2 and 2.0 write it, and it reads back as `BadType`. 3.0 refuses. | Refuses with `BadValue`, everywhere, and changes nothing.
+| Opening a newer format's file            | 1.2 and 2.0 read it, wrongly.                                      | `ErrTooNew`.
+| A file that isn't UTF-8                  | Varies by language.                                                | `ErrIO`, everywhere.
+| Walking repeated entries                 | Selector syntax differs by version.                                | `Each` gives paths, and `Child` extends them.
+| Saving in 1.2                            | No save call.                                                      | `Write` saves atomically.
+| Rust 1.2 fallback reads                  | No `get_*_or`.                                                     | `int(path, fallback)` and the rest, as in every other version.
+
+- `PutSyntax` checks its text by setting it in a new document and parsing `k: text` in another. The two have to come out the same, and the value at the path has to read the same as the parsed one.
 
 - An empty array reads back as `Empty` on 1.2 and 2.0, and as an empty `Good` on 3.0. The older formats can't write one any other way, so the wrapper accepts both.
 
@@ -221,6 +233,8 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 
 - TYPE is `int`, `float`, `bool`, `str`, `strs`, `ints`, `floats`, or `raw`.
 
+- A float field takes decimal and exponent forms, plus `nan`, `inf`, and `-inf`. A number too big for a float is `inf`. Each language's own parser takes other spellings, which the ops leave out so both read a script the same.
+
 - Every op is echoed first, after a `>` and a space, so an output file reads as a transcript.
 
 - Floats print the same in every language: the shortest digits that read back exactly, positional from 1e-5 to 1e17, otherwise with an exponent.
@@ -243,7 +257,7 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 
 - `cicd/fuzz.py` makes a document and an ops script from each seed, with a generator that knows each format's syntax. A quarter of the documents are mutated copies of the case documents instead.
 
-- Each case runs through the Go and Rust drivers on the same shcl version. The outputs must match byte for byte, neither may crash, and a put that says ok must read back the same.
+- Each case runs through the Go and Rust drivers on the same shcl version. The outputs must match byte for byte, neither may crash, and a put that says ok must read back the same. A float read that says `Good` must not give infinity or NaN.
 
 - It runs for a wall-clock budget, and a failing seed is saved with its document, script, and both outputs. If too few reads find a value, the run fails, since a generator that stopped making readable documents would pass forever.
 
@@ -272,6 +286,8 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 - Each version's adapter is a full copy with its differences, over one generic adapter with hooks. Most of each adapter is the differences.
 
 - A put is always read back. shcl 4 plans the same check inside its setters, and until then the wrapper is the one place to do it for every version.
+
+- A put of infinity or NaN is refused with `BadValue` in every version, as 3.0 does. Writing one and then saying `NoReadBack` was the other choice, but it leaves a value in the file that no read takes.
 
 - MIT, since programs copy this code into themselves.
 

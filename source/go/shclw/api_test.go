@@ -4,8 +4,10 @@
 package shclw_test
 
 import (
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/jim-collier/shclwrap/source/go/shclw"
@@ -27,6 +29,34 @@ func TestVerifyPut(t *testing.T) {
 		err = shclw.VerifyPut(d, "nope", shclw.Value{Kind: shclw.KindStrs})
 		if shclw.KindOf(err) != shclw.ErrNoReadBack {
 			t.Errorf("v%d: missing array: got %v, want noreadback", v.n, err)
+		}
+	}
+}
+
+// A float32 has to go in as its own shortest digits. Widened to float64
+// first, 0.9 was written as 0.8999999761581421.
+func TestPutFloat32(t *testing.T) {
+	texts := map[float32]string{0.9: "f: 0.9\n", 0.1: "f: 0.1\n", -2.5: "f: -2.5\n"}
+	for _, v := range libs {
+		for _, f := range []float32{0.9, 0.1, -2.5, 1e-10, math.MaxFloat32, 16777216, math.SmallestNonzeroFloat32} {
+			d := v.lib.New()
+			if err := d.Put("f", f); err != nil {
+				t.Errorf("v%d %v: %v", v.n, f, err)
+				continue
+			}
+			want, _ := strconv.ParseFloat(strconv.FormatFloat(float64(f), 'g', -1, 32), 64)
+			if g := d.GetFloat("f"); g.Status != shclw.Good || g.Value != want || float32(g.Value) != f {
+				t.Errorf("v%d %v: read back %v %v, want %v", v.n, f, g.Status, g.Value, want)
+			}
+			if text, ok := texts[f]; ok && d.Text() != text {
+				t.Errorf("v%d %v: text %q, want %q", v.n, f, d.Text(), text)
+			}
+		}
+		for _, f := range []float32{float32(math.NaN()), float32(math.Inf(1))} {
+			d := v.lib.New()
+			if err := d.Put("f", f); shclw.KindOf(err) != shclw.ErrBadValue || d.Has("f") {
+				t.Errorf("v%d %v: got %v, has %v, want badvalue and no edit", v.n, f, err, d.Has("f"))
+			}
 		}
 	}
 }

@@ -290,9 +290,11 @@ func Normalize(path string, v any) (Value, error) {
 	case uint32:
 		return Value{Kind: KindInt, Int: int64(x)}, nil
 	case float32:
-		return Value{Kind: KindFloat, Float: float64(x)}, nil
+		// float64(x) would write the float32's binary noise: 0.9 as 0.8999999761581421.
+		f, _ := strconv.ParseFloat(strconv.FormatFloat(float64(x), 'g', -1, 32), 64)
+		return finite(path, Value{Kind: KindFloat, Float: f})
 	case float64:
-		return Value{Kind: KindFloat, Float: x}, nil
+		return finite(path, Value{Kind: KindFloat, Float: x})
 	case bool:
 		return Value{Kind: KindBool, Bool: x}, nil
 	case string:
@@ -308,10 +310,46 @@ func Normalize(path string, v any) (Value, error) {
 		}
 		return Value{Kind: KindInts, Ints: ints}, nil
 	case []float64:
-		return Value{Kind: KindFloats, Floats: x}, nil
+		return finite(path, Value{Kind: KindFloats, Floats: x})
 	}
 	return Value{}, &Error{Kind: ErrBadValue, Path: path, Msg: fmt.Sprintf("no setter for %T", v)}
 }
+
+// finite refuses infinity and NaN, since no read takes them back. See
+// "What the wrapper evens out" in design.md.
+func finite(path string, v Value) (Value, error) {
+	if notFinite(v.Float) || slices.ContainsFunc(v.Floats, notFinite) {
+		return Value{}, &Error{Kind: ErrBadValue, Path: path, Msg: "not a finite number"}
+	}
+	return v, nil
+}
+
+// FiniteFloat makes an infinity or NaN read BadType. 1.2 and 2.0 read 1e400
+// as infinity, and 3.0 as BadType.
+func FiniteFloat(g Got[float64]) Got[float64] {
+	if g.Status == Good && notFinite(g.Value) {
+		g.Status, g.Value = BadType, 0
+	}
+	return g
+}
+
+// FiniteFloats is FiniteFloat for an array. Like 3.0, the array keeps its
+// length, with 0 for each item that wasn't a number.
+func FiniteFloats(g Got[[]float64]) Got[[]float64] {
+	if g.Status != Good || !slices.ContainsFunc(g.Value, notFinite) {
+		return g
+	}
+	g.Value = slices.Clone(g.Value)
+	for i, f := range g.Value {
+		if notFinite(f) {
+			g.Value[i] = 0
+		}
+	}
+	g.Status = BadType
+	return g
+}
+
+func notFinite(f float64) bool { return math.IsInf(f, 0) || math.IsNaN(f) }
 
 // VerifyPut reads back what a setter wrote, since shcl can take a value and
 // read back something else. See "What the wrapper evens out" in design.md.
@@ -358,6 +396,22 @@ func VerifyPut(d Doc, path string, v Value) error {
 		msg = "reads back as a different value"
 	}
 	return &Error{Kind: ErrNoReadBack, Path: path, Msg: msg}
+}
+
+// VerifySyntax reads back what PutSyntax set at path. alone is a new
+// document with the same text set at "k", and line is "k: text" parsed.
+// shcl drops a trailing comment from the text, and 1.2 and 2.0 take some
+// text a file line reads another way, so the two have to match. See "What
+// the wrapper evens out" in design.md.
+func VerifySyntax(d Doc, path string, alone, line Doc) error {
+	if alone.Canonical() != line.Canonical() {
+		return &Error{Kind: ErrNoReadBack, Path: path, Msg: "the text doesn't read back as typed"}
+	}
+	got, want := d.GetStr(path), line.GetStr("k")
+	if got.Status != want.Status || got.Value != want.Value {
+		return &Error{Kind: ErrNoReadBack, Path: path, Msg: "reads back as a different value"}
+	}
+	return nil
 }
 
 // DedupeNames keeps the first of each name, compared without ASCII case,

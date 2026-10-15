@@ -24,6 +24,39 @@ fn verify() {
 	check_verify::<shclw::v3::Version>(3);
 }
 
+/// An f32 has to go in as its own shortest digits. Widened to f64 first,
+/// 0.9 was written as 0.8999999761581421.
+// The read-back has to be exact.
+#[allow(clippy::float_cmp)]
+fn check_f32<L: Lib>(n: u32) {
+	let texts = [(0.9_f32, "f: 0.9\n"), (0.1, "f: 0.1\n"), (-2.5, "f: -2.5\n")];
+	for f in [0.9_f32, 0.1, -2.5, 1e-10, f32::MAX, 16_777_216.0, f32::from_bits(1)] {
+		let mut d = L::parse("");
+		if let Err(e) = d.put("f", f) {
+			panic!("v{n} {f}: {e}");
+		}
+		let want: f64 = f.to_string().parse().unwrap();
+		let g = d.get_float("f");
+		assert_eq!((g.status, g.value), (Status::Good, want), "v{n} {f}: read back");
+		if let Some((_, text)) = texts.iter().find(|(x, _)| *x == f) {
+			assert_eq!(d.text(), *text, "v{n} {f}: text");
+		}
+	}
+	for f in [f32::NAN, f32::INFINITY] {
+		let mut d = L::parse("");
+		let e = d.put("f", f).expect_err("non-finite put");
+		assert_eq!(e.kind, ErrKind::BadValue, "v{n} {f}");
+		assert!(!d.has("f"), "v{n} {f}: the put changed the document");
+	}
+}
+
+#[test]
+fn put_f32() {
+	check_f32::<shclw::v1::Version>(1);
+	check_f32::<shclw::v2::Version>(2);
+	check_f32::<shclw::v3::Version>(3);
+}
+
 fn scratch() -> PathBuf {
 	let base = std::env::var_os("TMPDIR").map_or_else(std::env::temp_dir, PathBuf::from);
 	let dir = base.join(format!("shclw-rust-api-{}", std::process::id()));

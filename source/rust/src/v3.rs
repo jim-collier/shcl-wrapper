@@ -236,7 +236,13 @@ impl ShclDoc for Doc {
 	}
 
 	fn float(&self, path: &str, fallback: f64) -> f64 {
-		self.d.get_float_or(path, fallback)
+		// Through get_float, so infinity gets the fallback too.
+		let g = self.get_float(path);
+		if g.ok() {
+			g.value
+		} else {
+			fallback
+		}
 	}
 
 	fn bool(&self, path: &str, fallback: bool) -> bool {
@@ -257,7 +263,12 @@ impl ShclDoc for Doc {
 	}
 
 	fn floats(&self, path: &str, fallback: &[f64]) -> Vec<f64> {
-		self.d.get_float_array_or(path, fallback.to_vec())
+		let g = self.get_floats(path);
+		if g.ok() {
+			g.value
+		} else {
+			fallback.to_vec()
+		}
 	}
 
 	fn raw(&self, path: &str, fallback: &str) -> String {
@@ -269,7 +280,7 @@ impl ShclDoc for Doc {
 	}
 
 	fn get_float(&self, path: &str) -> Got<f64> {
-		got(self.d.read_float(path))
+		crate::finite_float(got(self.d.read_float(path)))
 	}
 
 	fn get_bool(&self, path: &str) -> Got<bool> {
@@ -289,7 +300,7 @@ impl ShclDoc for Doc {
 	}
 
 	fn get_floats(&self, path: &str) -> Got<Vec<f64>> {
-		got(self.d.read_float_array(path))
+		crate::finite_floats(got(self.d.read_float_array(path)))
 	}
 
 	fn get_raw(&self, path: &str) -> Got<String> {
@@ -334,6 +345,7 @@ impl ShclDoc for Doc {
 
 	fn put(&mut self, path: &str, v: impl Into<Value>) -> Result<(), Error> {
 		let v = v.into();
+		crate::check_value(path, &v)?;
 		let st = match &v {
 			Value::Int(x) => self.d.set_int(path, *x),
 			Value::Float(x) => self.d.set_float(path, *x),
@@ -351,7 +363,11 @@ impl ShclDoc for Doc {
 	}
 
 	fn put_syntax(&mut self, path: &str, text: &str) -> Result<(), Error> {
-		Doc::set_err(path, self.d.set_literal(path, text))
+		Doc::set_err(path, self.d.set_literal(path, text))?;
+		let mut alone = new();
+		// A failed set leaves alone empty, which the check reports.
+		let _ = alone.d.set_literal("k", text);
+		crate::verify_syntax(self, path, &alone, &parse(&format!("k: {text}\n")))
 	}
 
 	fn comment(&mut self, path: &str, text: &str) -> Result<(), Error> {

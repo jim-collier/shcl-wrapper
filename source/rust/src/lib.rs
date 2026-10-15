@@ -243,7 +243,8 @@ impl From<f64> for Value {
 }
 impl From<f32> for Value {
 	fn from(v: f32) -> Value {
-		Value::Float(v.into())
+		// v.into() would write the f32's binary noise: 0.9 as 0.8999999761581421.
+		Value::Float(v.to_string().parse().unwrap_or(v.into()))
 	}
 }
 impl From<bool> for Value {
@@ -406,6 +407,65 @@ pub fn verify_put<D: ShclDoc + ?Sized>(d: &D, path: &str, v: &Value) -> Result<(
 		format!("reads back as {status}")
 	};
 	Err(Error::new(ErrKind::NoReadBack).path(path).msg(msg))
+}
+
+/// Refuses infinity and NaN, since no read takes them back. See "What the
+/// wrapper evens out" in design.md.
+pub fn check_value(path: &str, v: &Value) -> Result<(), Error> {
+	let finite = match v {
+		Value::Float(x) => x.is_finite(),
+		Value::Floats(x) => x.iter().all(|f| f.is_finite()),
+		_ => true,
+	};
+	if finite {
+		return Ok(());
+	}
+	Err(Error::new(ErrKind::BadValue).path(path).msg("not a finite number"))
+}
+
+/// Makes an infinity or NaN read `BadType`. 1.2 and 2.0 read 1e400 as
+/// infinity, and 3.0 as `BadType`.
+pub fn finite_float(mut g: Got<f64>) -> Got<f64> {
+	if g.status == Status::Good && !g.value.is_finite() {
+		g.status = Status::BadType;
+		g.value = 0.0;
+	}
+	g
+}
+
+/// `finite_float` for an array. Like 3.0, the array keeps its length, with
+/// 0 for each item that wasn't a number.
+pub fn finite_floats(mut g: Got<Vec<f64>>) -> Got<Vec<f64>> {
+	if g.status != Status::Good || g.value.iter().all(|f| f.is_finite()) {
+		return g;
+	}
+	for f in &mut g.value {
+		if !f.is_finite() {
+			*f = 0.0;
+		}
+	}
+	g.status = Status::BadType;
+	g
+}
+
+/// Reads back what `put_syntax` set at `path`. `alone` is a new document
+/// with the same text set at "k", and `line` is "k: text" parsed. shcl drops
+/// a trailing comment from the text, and 1.2 and 2.0 take some text a file
+/// line reads another way, so the two have to match. See "What the wrapper
+/// evens out" in design.md.
+pub fn verify_syntax<D: ShclDoc>(d: &D, path: &str, alone: &D, line: &D) -> Result<(), Error> {
+	if alone.canonical() != line.canonical() {
+		return Err(Error::new(ErrKind::NoReadBack)
+			.path(path)
+			.msg("the text doesn't read back as typed"));
+	}
+	let (got, want) = (d.get_str(path), line.get_str("k"));
+	if got.status != want.status || got.value != want.value {
+		return Err(Error::new(ErrKind::NoReadBack)
+			.path(path)
+			.msg("reads back as a different value"));
+	}
+	Ok(())
 }
 
 /// Keeps the first of each name, compared without ASCII case, since shcl
@@ -851,9 +911,16 @@ fn parse_value(typ: &str, f: &[String]) -> Option<Value> {
 	}
 }
 
-/// Takes plain decimal and exponent forms only. Each language's own parser
-/// takes a different set of spellings for infinity and NaN.
+/// Takes plain decimal and exponent forms, plus nan, inf, and -inf as
+/// `format_float` writes them. Each language's own parser takes a different
+/// set of spellings for those. A number too big is infinity.
 fn parse_float(s: &str) -> Option<f64> {
+	match s {
+		"nan" => return Some(f64::NAN),
+		"inf" => return Some(f64::INFINITY),
+		"-inf" => return Some(f64::NEG_INFINITY),
+		_ => {}
+	}
 	let odd = |c: char| c.is_ascii_alphabetic() && c != 'e' && c != 'E' || c == '_';
 	if s.is_empty() || s.contains(odd) {
 		return None;

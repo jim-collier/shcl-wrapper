@@ -20,7 +20,7 @@ from pathlib import Path
 
 VERSIONS = (1, 2, 3)
 NAMES = ("a", "b", "port", "name", "Server", "host", "tags", "x-y", "n_1", "list", "on")
-WORDS = ("alpha", "beta", "two words", "café", "x#y", "a, b", "'q'", '"dq"', "C:\\temp", "", " pad ")
+WORDS = ("alpha", "beta", "two words", "café", "x#y", "a # b", "a, b", "'q'", '"dq"', "C:\\temp", "", " pad ")
 TYPES = ("int", "float", "bool", "str", "strs", "ints", "floats", "raw")
 
 
@@ -38,7 +38,7 @@ def gen_scalar(rng: random.Random) -> str:
 	if kind == 0:
 		return str(rng.choice((0, 1, -7, 8080, 2**31, -(2**40), 2**63 - 1)))
 	if kind == 1:
-		return rng.choice(("0.5", "-2.25", "1e3", "3.14159", "1e-7", "100.0"))
+		return rng.choice(("0.5", "-2.25", "1e3", "3.14159", "1e-7", "100.0", "1e400", "-1e400", "nan", "inf"))
 	if kind == 2:
 		return rng.choice(("true", "false", "yes", "no", "on", "off"))
 	if kind == 3:
@@ -95,7 +95,7 @@ def gen_value(rng: random.Random, typ: str) -> list[str]:
 	if typ == "int":
 		return [str(rng.choice((0, 42, -1, 2**53, -(2**63))))]
 	if typ == "float":
-		return [rng.choice(("0.5", "-1.25", "1e20", "3", "0.001", "123456.789"))]
+		return [rng.choice(("0.5", "-1.25", "1e20", "3", "0.001", "123456.789", "1e400", "inf", "-inf", "nan"))]
 	if typ == "bool":
 		return [rng.choice(("true", "false"))]
 	if typ == "str":
@@ -104,7 +104,7 @@ def gen_value(rng: random.Random, typ: str) -> list[str]:
 		return [rng.choice(("a", "b c", "d,e", "")) for _ in range(rng.randrange(0, 4))]
 	if typ == "ints":
 		return [str(rng.randrange(-100, 100)) for _ in range(rng.randrange(0, 4))]
-	return [rng.choice(("0.5", "2", "-3.75")) for _ in range(rng.randrange(0, 4))]
+	return [rng.choice(("0.5", "2", "-3.75", "inf")) for _ in range(rng.randrange(0, 4))]
 
 
 def gen_case(seed: int, corpus: list[str]) -> Case:
@@ -128,7 +128,8 @@ def gen_case(seed: int, corpus: list[str]) -> Case:
 			case.puts.append((len(ops) - 1, typ, path, vals))
 			ops.append(f"get\t{typ}\t{path}")
 		elif roll < 0.6:
-			ops.append(f"or\t{rng.choice(TYPES)}\t{gen_path(rng)}\t{gen_value(rng, 'int')[0]}")
+			fallback = rng.choice((gen_value(rng, "int")[0], "0.5", "1e400", "nan"))
+			ops.append(f"or\t{rng.choice(TYPES)}\t{gen_path(rng)}\t{fallback}")
 		else:
 			ops.append(
 				rng.choice(
@@ -243,6 +244,18 @@ def check_roundtrips(case: Case, output: str) -> list[str]:
 	return problems
 
 
+def check_finite(output: str) -> list[str]:
+	"""A float read that says Good never gives infinity or NaN."""
+	problems = []
+	for block in output.split("\n> "):
+		lines = block.removeprefix("> ").split("\n")
+		if len(lines) < 2 or not lines[0].startswith("get\tfloat") or not lines[1].startswith("Good\t"):
+			continue
+		if {"inf", "-inf", "nan"} & set(lines[1].split("\t")[2:]):
+			problems.append(f"{lines[0]!r} read as {lines[1]!r}")
+	return problems
+
+
 def run_driver(cmd: list[str], version: int, doc: Path, work: Path, script: str) -> tuple[int, str, str]:
 	if work.exists():
 		shutil.rmtree(work)
@@ -303,6 +316,7 @@ def main() -> int:
 			problems.append("outputs differ")
 		elif go[0] == 0:
 			problems += check_roundtrips(case, go[1])
+			problems += check_finite(go[1])
 		for line in go[1].split("\n"):
 			if line.startswith(("Good\t", "Empty\t", "NotFound\t", "BadType\t", "Multiple\t", "BadPath\t")):
 				gets += 1

@@ -73,6 +73,20 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- shcl's Go module path is still `.../v2`, and Go won't take a v3 tag on it. Go stays on a commit until that changes.
 		- Quillroute plans to have its release refuse a commit pin. The same check would fit here.
 
+- Rename the project shclwrap
+	- ID: 2026101513524769
+	- Type: Task
+	- Status: Queued
+	- Priority: Critical
+	- Opened: 20261015-135247
+	- Opened by: JC
+	- Requirements:
+		- The project, the GitHub repo, and the Go module path are named shclwrap.
+	- Decisions:
+		- The Go packages, the Rust crate, the drivers, and the `SHCLW_` variables stay `shclw`.
+		- The contact address moves to the new name.
+		- The local project folders get renamed by hand, outside the repo.
+
 - Upgrade passes along a conversion that stopped partway
 	- ID: 2026101513330001
 	- Type: Bug

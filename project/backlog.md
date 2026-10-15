@@ -90,7 +90,7 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- 20261015: the name is shclwrap in the docs, the cicd output, and the contact address. The Go module path is `github.com/jim-collier/shclwrap/source/go`, with every import moved.
 		- 20261015: the GitHub repo itself still has the old name. It gets renamed after the merge.
 	- Branch: shclwrap
-	- Commit: COMMIT_TBD
+	- Commit: 3f6eb38
 	- Test case: none of its own, since it's a rename. The cicd gate passes on the renamed module.
 	- Swept: `git grep -iE 'shcl-wrapper|shcl_wrapper'` finds nothing.
 	- Closed: 20261015-135423

@@ -25,6 +25,62 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 
 ## Issues
 
+- Upgrade passes along a conversion that stopped partway
+	- ID: 2026101513330001
+	- Type: Bug
+	- Status: Waiting on signoff
+	- Severity: High
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Related IDs: 2026101513330002
+	- Steps to reproduce:
+		- Upgrade a 2.x file that ends inside a raw block that never closes.
+	- Incorrect behavior: The text comes back unconverted and with no Format line. Nothing is counted as lost, and there's no error.
+	- Expected behavior: An error, and the file left alone.
+	- Note: Radixmill refuses any result that doesn't read as the current format. Wovenshell runs shcl's stamped conversion a second time to find out.
+	- Reproduced: 20261015, on 3.0 in Go and Rust, with `from` 0 and 2. The text did come back converted. shcl closed the block at the end of the file and added the info block, so every line after the open fence stays raw text for good. Nothing lost and no error, as the item says. The unconverted text with no Format line is what shcl's own `Migrate` gives.
+	- Actual cause:
+		- shcl's `Upgrade` writes a raw block that never closes as closed, and says nothing. Its `migrate` command refuses the same file. The wrapper passed shcl's answer on.
+	- Decisions:
+		- Refused, as the item asks. The rule is wider than raw blocks: any file taken as 2.x that shcl 2.0 reports an error on is refused, which covers this and 2026101513330002. design.md has it under Decisions.
+	- Actual fix: On 3.0, `Upgrade` and `UpgradeFile` parse a file they take as 2.x with shcl 2.0 first. Any error there is `Refused`, with 2.0's errors in `Diags`. `UpgradeFile` then writes nothing and makes no backup. The 3.0 adapter builds 2.0 in now, and the Rust `shcl3` feature turns on `shcl2`.
+	- Note: shcl friction, a silent wrong answer. `a: 1`, then `b: ```` and `raw`, with no closing fence. `shcl upgrade --write` prints E005 and writes a fresh file with the block closed at the end, at exit 0. `migrate` refuses the same file at exit 7. Expected: `upgrade` and `Upgrade` refuse it too. Checked on shcl's current dev; the library hasn't changed since the pin.
+	- Verified: the gate and a 20 second fuzz, Go against Rust, with no difference.
+	- Branch: upgrade
+	- Commit: 18041cf
+	- Test case: tests/cases/013-upgrade-raw, Go `TestUpgradeRefusesOldErrors`, Rust `upgrade_refuses_old_errors`. They failed before the fix in Go and Rust, and pass after.
+	- Swept: `Upgrade` and `UpgradeFile` in Go `shclw3` and Rust `v3`. The 1.2 and 2.0 adapters convert nothing. 17 files ending in an open block, with `from` 0 and 2, were all refused or `Ambiguous`, the same in Go and Rust.
+	- Acceptance signoff: Waiting. The rule is wider than the item, and the 3.0 adapter now builds shcl 2.0 in.
+
+- Upgrade passes along lines the old shcl refused
+	- ID: 2026101513330002
+	- Type: Bug
+	- Status: Waiting on signoff
+	- Severity: High
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Related IDs: 2026101513330001
+	- Steps to reproduce:
+		- Upgrade `x: [ab]` as a 2.x file.
+	- Incorrect behavior: It comes back as `x: ab`, with nothing lost. 1.2 and 2.0 refused that line, so the old program never read it.
+	- Expected behavior: The line counts as lost, or the upgrade refuses.
+	- Note: Radixmill refuses a file whose original text has any E019 line. shcl means it to work this way.
+	- Reproduced: 20261015, on 3.0 in Go and Rust, with `from` 2. One detail differs. 1.2 and 2.0 report the line as E015, "missing colon; repaired as an empty value", and still read `x` as `ab`, so the old program read it with an error, and a Strict load failed. E019 is a 3.0 code. A line 2.0 skipped outright, like `z: [ab] c`, came through as written with nothing lost too.
+	- Actual cause:
+		- shcl's conversion reads `x: [ab]` as the 2.x `name:[disc]` form, the same way 2.0 repaired it, and doesn't look at whether 2.x reported an error on the line. Lines 2.x skipped come through as written.
+	- Decisions:
+		- The upgrade refuses, rather than count the line in `Unsure`. A count is easy to skip, and the upgraded file loads clean, so nothing would point at the line again.
+		- Any error shcl 2.0 reports counts, whatever its code, since E019 doesn't exist before 3.0. The same rule covers 2026101513330001. design.md has it under Decisions.
+		- It applies to a file the upgrade takes as 2.x: one shcl converts, or one passed with `from` 2 that doesn't name format 3. A file that loads clean with `from` 0 is still left alone with no check.
+	- Actual fix: The same change as 2026101513330001. On 3.0, a file taken as 2.x that shcl 2.0 reports errors on is `Refused`, with 2.0's errors in `Diags`, and `UpgradeFile` writes nothing.
+	- Note: shcl friction, a silent wrong answer. `x: [a, b]` upgraded with fromV2 comes back current with nothing lost. 2.0 read it as one string, `a, b`, and 3.0 reads 2 items. shcl's conversion counts it lost, but `Upgrade` drops that count when the file loads clean and the conversion leaves its text alone. Expected: Lost 1. The wrapper now refuses this file anyway, since 2.0 reports E015 on it.
+	- Verified: the gate and a 20 second fuzz, Go against Rust, with no difference.
+	- Branch: upgrade
+	- Commit: 18041cf
+	- Test case: tests/cases/014-upgrade-errors, Go `TestUpgradeRefusesOldErrors`, Rust `upgrade_refuses_old_errors`. They failed before the fix in Go and Rust, and pass after.
+	- Swept: `Upgrade` and `UpgradeFile` in Go `shclw3` and Rust `v3`. The 1.2 and 2.0 adapters convert nothing. A format 3 file passed with `from` 2 that 2.0 has errors on, such as `tags: [a, b]`, is still left alone.
+	- Acceptance signoff: Waiting. Refusing was picked over counting, and the item's E019 premise didn't hold as written.
+
 - Go and Rust wrappers over shcl 1.2, 2.0, and 3.0
 	- ID: 2026101512024150
 	- Type: Feature
@@ -125,62 +181,6 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- The tag is spelled with no dot, per shcl's own backlog.
 		- shcl's Go module path is still `.../v2`, and Go won't take a v3 tag on it. Go stays on a commit until that changes.
 		- Quillroute plans to have its release refuse a commit pin. The same check would fit here.
-
-- Upgrade passes along a conversion that stopped partway
-	- ID: 2026101513330001
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Severity: High
-	- Opened: 20261015-133300
-	- Opened by: JC
-	- Related IDs: 2026101513330002
-	- Steps to reproduce:
-		- Upgrade a 2.x file that ends inside a raw block that never closes.
-	- Incorrect behavior: The text comes back unconverted and with no Format line. Nothing is counted as lost, and there's no error.
-	- Expected behavior: An error, and the file left alone.
-	- Note: Radixmill refuses any result that doesn't read as the current format. Wovenshell runs shcl's stamped conversion a second time to find out.
-	- Reproduced: 20261015, on 3.0 in Go and Rust, with `from` 0 and 2. The text did come back converted. shcl closed the block at the end of the file and added the info block, so every line after the open fence stays raw text for good. Nothing lost and no error, as the item says. The unconverted text with no Format line is what shcl's own `Migrate` gives.
-	- Actual cause:
-		- shcl's `Upgrade` writes a raw block that never closes as closed, and says nothing. Its `migrate` command refuses the same file. The wrapper passed shcl's answer on.
-	- Decisions:
-		- Refused, as the item asks. The rule is wider than raw blocks: any file taken as 2.x that shcl 2.0 reports an error on is refused, which covers this and 2026101513330002. design.md has it under Decisions.
-	- Actual fix: On 3.0, `Upgrade` and `UpgradeFile` parse a file they take as 2.x with shcl 2.0 first. Any error there is `Refused`, with 2.0's errors in `Diags`. `UpgradeFile` then writes nothing and makes no backup. The 3.0 adapter builds 2.0 in now, and the Rust `shcl3` feature turns on `shcl2`.
-	- Note: shcl friction, a silent wrong answer. `a: 1`, then `b: ```` and `raw`, with no closing fence. `shcl upgrade --write` prints E005 and writes a fresh file with the block closed at the end, at exit 0. `migrate` refuses the same file at exit 7. Expected: `upgrade` and `Upgrade` refuse it too. Checked on shcl's current dev; the library hasn't changed since the pin.
-	- Verified: the gate and a 20 second fuzz, Go against Rust, with no difference.
-	- Branch: upgrade
-	- Commit: 18041cf
-	- Test case: tests/cases/013-upgrade-raw, Go `TestUpgradeRefusesOldErrors`, Rust `upgrade_refuses_old_errors`. They failed before the fix in Go and Rust, and pass after.
-	- Swept: `Upgrade` and `UpgradeFile` in Go `shclw3` and Rust `v3`. The 1.2 and 2.0 adapters convert nothing. 17 files ending in an open block, with `from` 0 and 2, were all refused or `Ambiguous`, the same in Go and Rust.
-	- Acceptance signoff: Waiting. The rule is wider than the item, and the 3.0 adapter now builds shcl 2.0 in.
-
-- Upgrade passes along lines the old shcl refused
-	- ID: 2026101513330002
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Severity: High
-	- Opened: 20261015-133300
-	- Opened by: JC
-	- Related IDs: 2026101513330001
-	- Steps to reproduce:
-		- Upgrade `x: [ab]` as a 2.x file.
-	- Incorrect behavior: It comes back as `x: ab`, with nothing lost. 1.2 and 2.0 refused that line, so the old program never read it.
-	- Expected behavior: The line counts as lost, or the upgrade refuses.
-	- Note: Radixmill refuses a file whose original text has any E019 line. shcl means it to work this way.
-	- Reproduced: 20261015, on 3.0 in Go and Rust, with `from` 2. One detail differs. 1.2 and 2.0 report the line as E015, "missing colon; repaired as an empty value", and still read `x` as `ab`, so the old program read it with an error, and a Strict load failed. E019 is a 3.0 code. A line 2.0 skipped outright, like `z: [ab] c`, came through as written with nothing lost too.
-	- Actual cause:
-		- shcl's conversion reads `x: [ab]` as the 2.x `name:[disc]` form, the same way 2.0 repaired it, and doesn't look at whether 2.x reported an error on the line. Lines 2.x skipped come through as written.
-	- Decisions:
-		- The upgrade refuses, rather than count the line in `Unsure`. A count is easy to skip, and the upgraded file loads clean, so nothing would point at the line again.
-		- Any error shcl 2.0 reports counts, whatever its code, since E019 doesn't exist before 3.0. The same rule covers 2026101513330001. design.md has it under Decisions.
-		- It applies to a file the upgrade takes as 2.x: one shcl converts, or one passed with `from` 2 that doesn't name format 3. A file that loads clean with `from` 0 is still left alone with no check.
-	- Actual fix: The same change as 2026101513330001. On 3.0, a file taken as 2.x that shcl 2.0 reports errors on is `Refused`, with 2.0's errors in `Diags`, and `UpgradeFile` writes nothing.
-	- Note: shcl friction, a silent wrong answer. `x: [a, b]` upgraded with fromV2 comes back current with nothing lost. 2.0 read it as one string, `a, b`, and 3.0 reads 2 items. shcl's conversion counts it lost, but `Upgrade` drops that count when the file loads clean and the conversion leaves its text alone. Expected: Lost 1. The wrapper now refuses this file anyway, since 2.0 reports E015 on it.
-	- Verified: the gate and a 20 second fuzz, Go against Rust, with no difference.
-	- Branch: upgrade
-	- Commit: 18041cf
-	- Test case: tests/cases/014-upgrade-errors, Go `TestUpgradeRefusesOldErrors`, Rust `upgrade_refuses_old_errors`. They failed before the fix in Go and Rust, and pass after.
-	- Swept: `Upgrade` and `UpgradeFile` in Go `shclw3` and Rust `v3`. The 1.2 and 2.0 adapters convert nothing. A format 3 file passed with `from` 2 that 2.0 has errors on, such as `tags: [a, b]`, is still left alone.
-	- Acceptance signoff: Waiting. Refusing was picked over counting, and the item's E019 premise didn't hold as written.
 
 - Info block and Format line
 	- ID: 2026101512024154

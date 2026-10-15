@@ -342,6 +342,21 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Swept: `Each` in Go `shclw1` to `shclw3` and Rust `v1` to `v3`, and what uses it: `Names` on 1.2 and 2.0, `Lines`, `First`, `Last`, and the `each` and `eachget` ops.
 	- Acceptance signoff: Waiting. Expanding wildcards rather than refusing them was a choice.
 
+- shcl 4 adapters
+	- ID: 2026101512024163
+	- Type: Feature
+	- Status: Stalled
+	- Priority: High
+	- Opened: 2026-10-15
+	- Opened by: JC
+	- Prereq IDs: shcl 4 in each language. It's planned Rust first, then C, then Go and Python.
+	- Requirements:
+		- The same API, over shcl 4.
+	- Notes:
+		- 4 keeps every line as typed, so Text and Write get simpler. Its read-back check in setters can replace the wrapper's.
+	- Progress log:
+		- 20261015: shcl 4 isn't built in any language yet, only planned in its v4 doc. This waits on it.
+
 - Move the 3.0 pin to the first 3.0 beta
 	- ID: 2026101512024165
 	- Type: Task
@@ -370,19 +385,74 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Notes:
 		- Cobblevale uses it from C++, and Folderkite from C.
 		- shcl's C header has no version macro before 3.0, so 1.2 and 2.0 are told apart by what they declare.
+	- Progress log:
+		- 20261015: split into 5 parts, each its own item below. This closes when they do.
 
-- shcl 4 adapters
-	- ID: 2026101512024163
+- C: header, loading, saving, and reads on shcl 3.0
+	- ID: 2026101516110959
 	- Type: Feature
 	- Status: Queued
 	- Priority: High
-	- Opened: 2026-10-15
+	- Opened: 20261015-161111
 	- Opened by: JC
-	- Prereq IDs: shcl 4 in each language. It's planned Rust first, then C, then Go and Python.
+	- Parent ID: 2026101512024159
+	- Related IDs: 2026101513330046, 2026101513330047
 	- Requirements:
-		- The same API, over shcl 4.
-	- Notes:
-		- 4 keeps every line as typed, so Text and Write get simpler. Its read-back check in setters can replace the wrapper's.
+		- `shclw.h` over shcl 3.0's `shcl.h`, usable from C and C++.
+		- New, Parse, Open, Text, Canonical, Write, diagnostics, errors, and both read tiers for every type.
+		- Settle who owns and frees what a read gives, and how strings keep their length.
+		- A C driver for the ops these cover, run against the shared cases from cicd.
+
+- C: walking and writes on shcl 3.0
+	- ID: 2026101516110996
+	- Type: Feature
+	- Status: Queued
+	- Priority: High
+	- Opened: 20261015-161111
+	- Opened by: JC
+	- Parent ID: 2026101512024159
+	- Prereq IDs: 2026101516110959
+	- Requirements:
+		- Has, Count, Names, Each, Child, Line, Lines, First, and Last.
+		- Put, PutSyntax, Comment, and Remove, with the same read-back check as Go and Rust.
+
+- C: format, upgrade, and the info block on shcl 3.0
+	- ID: 2026101516111033
+	- Type: Feature
+	- Status: Queued
+	- Priority: High
+	- Opened: 20261015-161111
+	- Opened by: JC
+	- Parent ID: 2026101512024159
+	- Prereq IDs: 2026101516110996
+	- Requirements:
+		- FormatOf, Upgrade, UpgradeFile, InfoBlock, StampFormat, Rewrites, and Check.
+		- The upgrade refuses a 2.x file that shcl 2.0 has errors on, as in Go and Rust, if 2.0 can be built in beside 3.0.
+
+- C: shcl 1.2 and 2.0
+	- ID: 2026101516111070
+	- Type: Feature
+	- Status: Queued
+	- Priority: High
+	- Opened: 20261015-161111
+	- Opened by: JC
+	- Parent ID: 2026101512024159
+	- Prereq IDs: 2026101516111033
+	- Requirements:
+		- The same header over 1.2 and 2.0, told apart by what each `shcl.h` declares.
+		- Every shared case passes on all 3 versions.
+
+- C: fuzz against Go
+	- ID: 2026101516111107
+	- Type: Feature
+	- Status: Queued
+	- Priority: High
+	- Opened: 20261015-161111
+	- Opened by: JC
+	- Parent ID: 2026101512024159
+	- Prereq IDs: 2026101516111070
+	- Requirements:
+		- fuzz.py runs the C driver beside Go and Rust, on every version.
 
 - C: copy reads out and free shcl's read memory
 	- ID: 2026101513330046

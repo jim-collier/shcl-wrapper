@@ -59,6 +59,46 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- 20261015: 15,000 fuzz cases in 90 seconds, Go against Rust, with no difference left.
 	- Branch: go-rust
 
+- Move the 3.0 pin to the first 3.0 beta
+	- ID: 2026101512024165
+	- Type: Task
+	- Status: Stalled
+	- Priority: Avg
+	- Opened: 2026-10-15
+	- Opened by: JC
+	- Requirements:
+		- Pin `v3.0.0-beta1` once it's tagged, in place of a dev commit.
+	- Notes:
+		- The tag is spelled with no dot, per shcl's own backlog.
+		- shcl's Go module path is still `.../v2`, and Go won't take a v3 tag on it. Go stays on a commit until that changes.
+		- Quillroute plans to have its release refuse a commit pin. The same check would fit here.
+
+- Upgrade passes along a conversion that stopped partway
+	- ID: 2026101513330001
+	- Type: Bug
+	- Status: Queued
+	- Severity: High
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Steps to reproduce:
+		- Upgrade a 2.x file that ends inside a raw block that never closes.
+	- Incorrect behavior: The text comes back unconverted and with no Format line. Nothing is counted as lost, and there's no error.
+	- Expected behavior: An error, and the file left alone.
+	- Note: Radixmill refuses any result that doesn't read as the current format. Wovenshell runs shcl's stamped conversion a second time to find out.
+
+- Upgrade passes along lines the old shcl refused
+	- ID: 2026101513330002
+	- Type: Bug
+	- Status: Queued
+	- Severity: High
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Steps to reproduce:
+		- Upgrade `x: [ab]` as a 2.x file.
+	- Incorrect behavior: It comes back as `x: ab`, with nothing lost. 1.2 and 2.0 refused that line, so the old program never read it.
+	- Expected behavior: The line counts as lost, or the upgrade refuses.
+	- Note: Radixmill refuses a file whose original text has any E019 line. shcl means it to work this way.
+
 - Info block and Format line
 	- ID: 2026101512024154
 	- Type: Feature
@@ -71,18 +111,10 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Notes:
 		- Quillroute, Radixmill, Folderkite, Tickerwren, and Mossrealm each do this by hand today.
 		- 1.2 and 2.0 have no info block, so the wrapper would write it there itself.
-
-- Layered loading
-	- ID: 2026101512024156
-	- Type: Feature
-	- Status: Queued
-	- Priority: Avg
-	- Opened: 2026-10-15
-	- Opened by: JC
-	- Requirements:
-		- Defaults, then site, then user file, as one document.
-	- Notes:
-		- Cobblevale uses shcl's merge. Mossrealm does it by hand.
+		- Cobblevale wants a way to stamp the Format line without the banner. Its new files had none, and read back like 2.x files.
+		- shcl's own banner setter misses a block that has a line after it, and adds a second one. Folderkite strips the old block itself.
+		- Banners written during the 3.0 betas link a tag that doesn't exist. Wovenshell replaces 4 old spellings at launch.
+		- Radixmill and Cobblevale add the Format line to their test files by hand.
 
 - C wrapper
 	- ID: 2026101512024159
@@ -99,19 +131,6 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- Cobblevale uses it from C++, and Folderkite from C.
 		- shcl's C header has no version macro before 3.0, so 1.2 and 2.0 are told apart by what they declare.
 
-- Python wrapper
-	- ID: 2026101512024161
-	- Type: Feature
-	- Status: Queued
-	- Priority: Avg
-	- Opened: 2026-10-15
-	- Opened by: JC
-	- Requirements:
-		- One module. It finds which shcl is installed at run time.
-		- Its own driver, run against the shared cases and in the fuzzer.
-	- Notes:
-		- Used by Lenscart, on 1.2.
-
 - shcl 4 adapters
 	- ID: 2026101512024163
 	- Type: Feature
@@ -125,18 +144,116 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Notes:
 		- 4 keeps every line as typed, so Text and Write get simpler. Its read-back check in setters can replace the wrapper's.
 
-- Move the 3.0 pin to the first 3.0 beta
-	- ID: 2026101512024165
-	- Type: Task
-	- Status: Stalled
+- Say when Write rewrote the whole file
+	- ID: 2026101513330003
+	- Type: Feature
+	- Status: Queued
+	- Priority: High
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Requirements:
+		- Write, or a call made before it, says when 3.0 couldn't keep the file's own lines and wrote the canonical form instead.
+	- Note: Quillroute compares the canonical text with what it read, and adds an "also" line to its plan. Wovenshell checks renames against the canonical form, since the fallback moves comments.
+
+- Pick the first or last of a repeated key
+	- ID: 2026101513330004
+	- Type: Feature
+	- Status: Queued
+	- Priority: High
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Requirements:
+		- A read option that takes the first or the last instance, in place of `Multiple`.
+		- A way to list the other instances' lines, for a "set more than once" warning.
+	- Note: Tallowbase takes the first. Quillroute takes the last and lists the rest as ignored. Folderkite falls back to the default with a warning. Wovenshell, Radixmill, and Tickerwren report the key as set twice.
+
+- UpgradeFile puts the old file back when the write fails
+	- ID: 2026101513330005
+	- Type: Feature
+	- Status: Queued
+	- Priority: High
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Requirements:
+		- The original survives any failure.
+		- Before replacing the file, check that it hasn't changed since it was read.
+	- Note: Radixmill, Quillroute, Mossrealm, and Cobblevale each do this themselves. Check what shcl's own UpgradeFile already does first.
+
+- C: copy reads out and free shcl's read memory
+	- ID: 2026101513330046
+	- Type: Feature
+	- Status: Queued
+	- Priority: High
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Parent ID: 2026101512024159
+	- Note: shcl keeps every string read until the document is freed. Folderkite saw 19 MB after 200,000 reads, so it releases reads after each one and compacts after a save.
+
+- Put writes a float32 with float64 noise
+	- ID: 2026101513330006
+	- Type: Bug
+	- Status: Queued
+	- Severity: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Steps to reproduce:
+		- Put 0.9 as a Go `float32` or a Rust `f32`.
+	- Incorrect behavior: The file says `0.8999999761581421`.
+	- Expected behavior: `0.9`, the shortest text that reads back as the same float32.
+	- Note: Mossrealm formats the value as text and parses it back before setting it. Wovenshell rounds to 3 places.
+
+- PutSyntax doesn't read its value back
+	- ID: 2026101513330007
+	- Type: Bug
+	- Status: Queued
+	- Severity: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Steps to reproduce:
+		- PutSyntax `a # b` on a path.
+	- Incorrect behavior: It says ok, and the value reads back as `a`.
+	- Expected behavior: `NoReadBack`, the same as Put.
+	- Note: Cobblevale reads its literal back and falls back to a plain string. Quillroute does the same for its single-quoted paths.
+
+- Float reads take infinity as good
+	- ID: 2026101513330008
+	- Type: Bug
+	- Status: Queued
+	- Severity: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Steps to reproduce:
+		- Read `x: 1e400` as a float.
+	- Incorrect behavior: `Good`, with infinity as the value.
+	- Expected behavior: `BadType`.
+	- Note: Wovenshell checks every float it reads. Cobblevale found a `NaN` put on 1.2 that reads back as `BadType`.
+
+- Layered loading
+	- ID: 2026101512024156
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 2026-10-15
+	- Opened by: JC
+	- Related IDs: 2026101513330030
+	- Requirements:
+		- Defaults, then site, then user file, as one document.
+	- Notes:
+		- Cobblevale uses shcl's merge. Mossrealm does it by hand.
+		- Mossrealm's layers are defaults, then a system file, then the user file, then the command line.
+
+- Python wrapper
+	- ID: 2026101512024161
+	- Type: Feature
+	- Status: Queued
 	- Priority: Avg
 	- Opened: 2026-10-15
 	- Opened by: JC
 	- Requirements:
-		- Pin `v3.0.0-beta1` once it's tagged, in place of a dev commit.
+		- One module. It finds which shcl is installed at run time.
+		- Its own driver, run against the shared cases and in the fuzzer.
 	- Notes:
-		- The tag is spelled with no dot, per shcl's own backlog.
-		- shcl's Go module path is still `.../v2`, and Go won't take a v3 tag on it. Go stays on a commit until that changes.
+		- Used by Lenscart, on 1.2.
 
 - Move the other projects onto the wrapper
 	- ID: 2026101512024167
@@ -152,6 +269,8 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- Tallowbase, Tickerwren, Radixmill, and Mossrealm fit the API as it is.
 		- Quillroute and Wovenshell also need the info block, and Wovenshell datetime reads.
 		- Cobblevale and Folderkite wait on the C wrapper, and Lenscart on the Python one.
+		- The wrapper already covers some of their workarounds, which can go as each one moves: Tallowbase's path cursor and index walks, Quillroute's name dedupe, quoting names made of digits, refusing a set on a repeated key, reading every put back, and failing a load on any error.
+		- Each project's other workarounds have their own items, with the project named in the item.
 
 - Tests for upgrade and save failures
 	- ID: 2026101512024169
@@ -162,6 +281,273 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Opened by: JC
 	- Requirements:
 		- A refused save, a taken backup name, and an upgrade of a real file, on each version that has them.
+
+- Report blocks that shcl merged because they share a name
+	- ID: 2026101513330009
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Requirements:
+		- List each merged block, with the lines of both copies.
+	- Note: Tallowbase, Cobblevale, and Radixmill all lost a second copy of a block without a word. shcl's H002 hint only fires when the 2 blocks are apart.
+
+- Tell a 2.x file from a current one by its banner
+	- ID: 2026101513330010
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Requirements:
+		- With `from` 0, a file with no Format line but with the 2.x banner is taken as 2.x.
+	- Note: Quillroute looks for the banner. Cobblevale, Folderkite, Mossrealm, and Wovenshell take any file with no Format line as old, which is wrong for a new file with no banner.
+
+- Upgrade swaps the 2.x banner for the current one
+	- ID: 2026101513330011
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Requirements:
+		- Replace the old banner block in place, keeping the file's line endings.
+	- Note: shcl leaves the old banner and adds a Format line at the end. Quillroute replaces the block itself.
+
+- Upgrade lists the lines it changed
+	- ID: 2026101513330012
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Note: Quillroute diffs the text line by line to say how many lines were written differently.
+
+- Upgrade lists the lines it lost
+	- ID: 2026101513330013
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Requirements:
+		- Line numbers, not only a count.
+	- Note: Cobblevale logs them, and its CI checks the count. Wovenshell shows a notice for each one. A 1.x line break in a bare value that looks like a Windows path counts as lost, though 3.0 could write it as `\u000A`.
+
+- Open a newer-format file read-only
+	- ID: 2026101513330014
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Requirements:
+		- Open can read a newer file where the bound shcl is able to, and Write refuses on that document.
+	- Note: Open refuses with `ErrTooNew` today. Folderkite reads newer files and never saves over them. Radixmill never rewrites a file named on the command line. Cobblevale stops writing when its backup failed.
+
+- Create-only Write
+	- ID: 2026101513330015
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Requirements:
+		- Fails if the file exists, and stays right when 2 processes create it at once.
+	- Note: Radixmill hard-links a synced temp file into place. shcl's atomic write replaces a file it finds there.
+
+- Write with a file mode
+	- ID: 2026101513330016
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Requirements:
+		- A new file is created with the mode given, such as 0600.
+	- Note: Quillroute's accounts file has tokens in it. shcl creates files at 0666 less the umask.
+
+- Write refuses when the file changed on disk since it was read
+	- ID: 2026101513330017
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Note: Quillroute re-reads the file under its own lock. Radixmill and Lenscart both lost writes to 2 processes saving at once, and Lenscart moved its counters out of shcl because of it.
+
+- List the lines a load couldn't use
+	- ID: 2026101513330018
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Requirements:
+		- Line numbers, not only a count.
+	- Note: Wovenshell builds the list from error diagnostics and drops line 0. Folderkite warns at load with the count. Cobblevale only tracks whether there were any.
+
+- Back up a file before a save that would lose lines
+	- ID: 2026101513330019
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Requirements:
+		- A save option that copies the file aside and then writes, in place of `Refused`.
+	- Note: Cobblevale does this on its first write over such a file. 1.2 has no refusal, so the wrapper's own 1.2 Write loses those lines with no warning.
+
+- Put fills in a commented default line
+	- ID: 2026101513330020
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Requirements:
+		- Setting a key whose commented `key: value ## Default` line is in the file fills in that line, so the lines below it don't move.
+	- Note: shcl adds a new line above the comment. Wovenshell writes the line by hand, and reprints its launch messages with the new line numbers. Folderkite rebuilds its whole defaults list on every save.
+
+- Read the commented defaults in a file
+	- ID: 2026101513330021
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Requirements:
+		- List commented `key: value` lines, each with the path it would set.
+	- Note: shcl gives comment lines no path. Wovenshell has its own indent walker for this, and Folderkite strips and re-adds its list.
+
+- Comment doesn't stack, and leaves the user's own notes
+	- ID: 2026101513330022
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Requirements:
+		- Comment replaces the text it wrote before, and leaves other comments above the key alone.
+	- Note: Each set adds another line, and clearing would delete notes the user wrote. Folderkite only sets a comment on a new key, so a reworded comment never reaches a key that's already set.
+
+- Remove keeps a key's comments when it's set again
+	- ID: 2026101513330023
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Note: Wovenshell edits the lines by hand so that way a setting goes back to its default. Mossrealm lives with losing the comment.
+
+- Show the text a value would be written as
+	- ID: 2026101513330024
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Note: Quillroute and Wovenshell set the value on a throwaway document and read its canonical text. Folderkite builds its defaults list the same way. Quillroute also checks that text for `\u` escapes.
+
+- Put writes Windows paths in single quotes
+	- ID: 2026101513330025
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Requirements:
+		- A string with a backslash and no apostrophe or line break goes in single quotes.
+	- Note: shcl writes some paths bare, some in single quotes, and some in double quotes with every backslash doubled. Quillroute uses PutSyntax and a read-back. It's queued with shcl too.
+
+- Let a program treat chosen hints as errors
+	- ID: 2026101513330026
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Note: Cobblevale counts errors only, so a mistyped table that merges every entry shows nothing. In Quillroute, `p: "C:\temp"` loads with a tab in it, and only hint H004 says so.
+
+- Check keeps schema faults apart from the file's
+	- ID: 2026101513330027
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Note: A schema fault's line number is in the schema, not the file. On 1.2 it also turns off the unknown-key check. Tallowbase splits them out and tests that an unknown key still gets reported.
+
+- Names as the file typed them
+	- ID: 2026101513330028
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Requirements:
+		- Names and Each can give a name in its original case.
+	- Note: Radixmill's error messages can only show the lowercased name. Lenscart, Tallowbase, and Quillroute store names as values to keep their case.
+
+- Lists of records
+	- ID: 2026101513330029
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Requirements:
+		- Write and read a list of rows with named fields. A write replaces the whole list.
+	- Note: Lenscart removes the section and writes `rowN` blocks. Mossrealm packs records into one flat float array. Cobblevale uses repeated blocks and walks them by index.
+
+- Save only what differs from the layers below
+	- ID: 2026101513330030
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Related IDs: 2026101512024156
+	- Note: Mossrealm writes only the differences, and deletes the user file when nothing differs. Folderkite stores only changed values.
+
+- Int reads within a range
+	- ID: 2026101513330031
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Note: shcl ints are 64-bit. Mossrealm guards u32 reads and Cobblevale int32 reads, and both fall back when a value is out of range.
+
+- Unsigned 64-bit values
+	- ID: 2026101513330032
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Note: Mossrealm has seeds past the i64 limit, and stores them as base32 text.
+
+- C: strings with lengths
+	- ID: 2026101513330047
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Parent ID: 2026101512024159
+	- Note: shcl strings aren't NUL-terminated and can hold a NUL. Cobblevale garbled non-ASCII text, and Folderkite cut a save short at a NUL.
+
+- C: build with shcl's file calls left out
+	- ID: 2026101513330048
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Parent ID: 2026101512024159
+	- Note: Cobblevale compiles shcl in one file with `SHCL_NO_FILE_IO`, since the file calls pull in `windows.h`, adn writes files itself. Write would need its own code for that build.
 
 - Commit and publish from cicd
 	- ID: 2026101512024171
@@ -183,6 +569,145 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Opened by: JC
 	- Requirements:
 		- The shared cases on Windows and macOS, mostly for the atomic write.
+	- Notes:
+		- shcl 2.0 on Windows could lose the old file when a replace failed. 3.0 fixed it, and Wovenshell still keeps its own restore. The wrapper's own 1.2 write needs the same check.
+
+- Comment out a setting in place
+	- ID: 2026101513330033
+	- Type: Feature
+	- Status: Queued
+	- Priority: Low
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Note: Wovenshell turns a setting off by commenting its line by hand, since Remove takes the comments with it.
+
+- Reorder repeated entries
+	- ID: 2026101513330034
+	- Type: Feature
+	- Status: Queued
+	- Priority: Low
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Note: Wovenshell removes and rewrites a whole block to change its order.
+
+- Remove takes out a header it left empty
+	- ID: 2026101513330035
+	- Type: Feature
+	- Status: Queued
+	- Priority: Low
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Note: Removing the last key under a repeated header leaves the header, and takes the blank line above it. Quillroute lives with it. It's queued with shcl too.
+
+- Put replaces every copy of a repeated key
+	- ID: 2026101513330036
+	- Type: Feature
+	- Status: Queued
+	- Priority: Low
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Note: The wrapper refuses with `BadPath` today. Cobblevale removes the key and then sets it.
+
+- Write skips a save when nothing changed
+	- ID: 2026101513330037
+	- Type: Feature
+	- Status: Queued
+	- Priority: Low
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Note: Wovenshell compares the text first.
+
+- Read a number written as an int or a float
+	- ID: 2026101513330038
+	- Type: Feature
+	- Status: Queued
+	- Priority: Low
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Note: Wovenshell merges the 2 for single values and for mixed lists.
+
+- Decimal reads
+	- ID: 2026101513330039
+	- Type: Feature
+	- Status: Queued
+	- Priority: Low
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Note: Tickerwren reads money as text and parses it itself, so no binary float gets in.
+
+- Warn on a value that's only a comment
+	- ID: 2026101513330040
+	- Type: Feature
+	- Status: Queued
+	- Priority: Low
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Note: `color: #112233` reads as `Empty`. Wovenshell finds those lines and names them.
+
+- Warn on lines under a key that has a value
+	- ID: 2026101513330041
+	- Type: Feature
+	- Status: Queued
+	- Priority: Low
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Note: Those lines are never read, and the key above reads as `Empty`. Radixmill refuses them. In Folderkite a file written that way loads as nothing, with no complaint.
+
+- Map a struct to a block
+	- ID: 2026101513330042
+	- Type: Feature
+	- Status: Queued
+	- Priority: Low
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Note: Mossrealm maps every field by hand, both ways. This may be past the size design.md sets for the wrapper.
+
+- Check a copied wrapper against its commit
+	- ID: 2026101513330043
+	- Type: Feature
+	- Status: Queued
+	- Priority: Low
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Note: Copying is one of the supported ways to use the wrapper. Radixmill byte-checks its copy of shcl against the pinned commit, after a tree-wide edit broke it once.
+
+- Find out if array reads take a single value on every version
+	- ID: 2026101513330044
+	- Type: Task
+	- Status: Queued
+	- Priority: Low
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Note: Mossrealm writes a one-item row as a plain value and reads it both ways. Lenscart reads every field as an array.
+
+- Find out if Check repeats the load's diagnostics
+	- ID: 2026101513330045
+	- Type: Task
+	- Status: Queued
+	- Priority: Low
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Note: Lenscart drops repeats by line, code, and message after validating.
+
+- C: out-of-memory hook
+	- ID: 2026101513330049
+	- Type: Feature
+	- Status: Queued
+	- Priority: Low
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Parent ID: 2026101512024159
+	- Note: shcl 1.2 and 2.0 print and exit on out of memory. Folderkite sets its own hook.
+
+- Python: run from a copied file
+	- ID: 2026101513330050
+	- Type: Feature
+	- Status: Queued
+	- Priority: Low
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Parent ID: 2026101512024161
+	- Note: Lenscart bundles shcl's wheel in its packages. Folderkite parses shcl by hand in its Python tools, since nothing is installed there.
 
 - Make the repo public
 	- ID: 2026101512024148

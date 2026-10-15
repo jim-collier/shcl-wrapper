@@ -1,0 +1,8 @@
+> diags
+3	error	E019	malformed array, text after ']'; quote the value if it is text
+> get	str	x
+Good	1	[ab]
+> upgrade
+error ambiguous
+> upgrade	2
+error refused

@@ -1,0 +1,4 @@
+diags
+get	str	x
+upgrade
+upgrade	2

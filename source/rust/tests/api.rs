@@ -142,3 +142,36 @@ fn inner() {
 	);
 	check_inner(3, &d3, &d3.inner().paths());
 }
+
+/// A 2.x file the old shcl reported errors on is refused, and `upgrade_file`
+/// leaves it as it was, with no backup. A clean one still goes.
+#[test]
+fn upgrade_refuses_old_errors() {
+	// Not under scratch(), which open() removes while this runs.
+	let base = std::env::var_os("TMPDIR").map_or_else(std::env::temp_dir, PathBuf::from);
+	let dir = base.join(format!("shclw-rust-upgrade-{}", std::process::id()));
+	for (text, line) in [("a: 1\nb: ```\nraw line\nc: 2\n", 2), ("x: [ab]\ny: 1\n", 1)] {
+		let e = shclw::v3::upgrade(text, 2).expect_err("upgrade");
+		assert_eq!(e.kind, ErrKind::Refused, "upgrade {text:?}");
+		assert_eq!(e.diags.first().map(|d| d.line), Some(line), "upgrade {text:?}");
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).unwrap();
+		let path = dir.join("c.shcl");
+		fs::write(&path, text).unwrap();
+		let e = shclw::v3::upgrade_file(&path.to_string_lossy(), 2).expect_err("upgrade_file");
+		assert_eq!(e.kind, ErrKind::Refused, "upgrade_file {text:?}");
+		assert_eq!(
+			fs::read_to_string(&path).unwrap(),
+			text,
+			"upgrade_file changed the file"
+		);
+		assert_eq!(
+			fs::read_dir(&dir).unwrap().count(),
+			1,
+			"upgrade_file {text:?}: files beside it"
+		);
+	}
+	let u = shclw::v3::upgrade("tags: a, b\n", 2).expect("clean 2.x file");
+	assert!(u.changed, "clean 2.x file: {u:?}");
+	let _ = fs::remove_dir_all(&dir); // only this test's own dir
+}

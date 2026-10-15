@@ -1,0 +1,6 @@
+> diags
+2	error	E005	unterminated raw block
+> upgrade
+error refused
+> upgrade	2
+error refused

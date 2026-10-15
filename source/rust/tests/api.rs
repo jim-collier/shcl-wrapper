@@ -97,10 +97,14 @@ fn inner() {
 	check_inner(2, &d2, &d2.inner().paths());
 
 	let mut d3 = shclw::v3::parse("a: 1\n");
-	assert_eq!(d3.inner_mut().set_empty("a"), shcl3::SetStatus::Ok, "v3 set_empty");
+	assert_eq!(
+		d3.inner_mut().set_empty("a"),
+		shclw::v3::shcl::SetStatus::Ok,
+		"v3 set_empty"
+	);
 	assert_eq!(
 		d3.inner_mut().set_string("b", "set inside"),
-		shcl3::SetStatus::Ok,
+		shclw::v3::shcl::SetStatus::Ok,
 		"v3 set_string"
 	);
 	check_inner(3, &d3, &d3.inner().paths());

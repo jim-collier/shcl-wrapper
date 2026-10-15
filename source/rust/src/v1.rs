@@ -7,7 +7,8 @@
 //! the canonical form, `write` saves it atomically, and `upgrade` only
 //! refuses files newer than 1.2 can read.
 
-use shcl1 as shcl;
+/// The shcl crate underneath, so code using `inner()` can name its types.
+pub use shcl1 as shcl;
 
 use crate::{Diag, ErrKind, Error, Got, Node, Severity, ShclDoc, Status, Strictness, Upgraded, Value};
 

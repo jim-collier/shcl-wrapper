@@ -8,7 +8,8 @@
 //! lines the load couldn't use, and `upgrade` only refuses files 2.0 can't
 //! read.
 
-use shcl2 as shcl;
+/// The shcl crate underneath, so code using `inner()` can name its types.
+pub use shcl2 as shcl;
 
 use crate::{Diag, ErrKind, Error, Got, Node, Severity, ShclDoc, Status, Strictness, Upgraded, Value};
 

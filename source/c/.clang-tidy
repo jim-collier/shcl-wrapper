@@ -1,0 +1,17 @@
+# The analyzer and the bug-prone checks. shcl.h is someone else's, so only
+# shclw's own headers are checked.
+Checks: >
+  -*,
+  clang-analyzer-*,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  cert-*,
+  misc-*,
+  -misc-include-cleaner,
+  performance-*,
+  portability-*,
+  readability-braces-around-statements,
+  readability-non-const-parameter
+WarningsAsErrors: '*'
+HeaderFilterRegex: 'shclw[^/]*\.h$'

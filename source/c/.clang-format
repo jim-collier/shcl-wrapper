@@ -1,0 +1,9 @@
+# Tabs to indent and spaces to line up, as the Go and Rust code does.
+BasedOnStyle: LLVM
+UseTab: AlignWithSpaces
+IndentWidth: 4
+TabWidth: 4
+ColumnLimit: 120
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortFunctionsOnASingleLine: All
+IndentCaseLabels: false

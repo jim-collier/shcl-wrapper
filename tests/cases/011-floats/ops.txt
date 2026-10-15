@@ -5,6 +5,9 @@ get	floats	list
 or	float	big	7
 or	floats	list	7	8
 or	float	missing	1e400
+# A power of 2 whose shortest digits aren't the nearest at that length.
+or	float	missing	7.120236347223045e-307
+or	float	missing	-0
 put	float	ok	inf
 put	float	ok	-inf
 put	float	ok	nan

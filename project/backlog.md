@@ -354,6 +354,7 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- 20261015: `shclw1.c` and `shclw2.c` are ports of Go's `shclw1` and `shclw2`, each a copy of the other with its differences. Go's `OneTarget`, `EachPaths`, and `FormatIn` are in the shared `shclw.c` and `info.c`. 1.2's save is a write of the wrapper's own, as in Go and Rust.
 		- All 33 shared cases run whole on all 3 versions. The API tests run on each, sanitized, plain, and as C++, with the 3.0-only ones split out. cicd lints, builds, and tests each version.
 		- On 1.2 and 2.0, reads, text, and edits keep their memory until the document is freed. Those versions have no call that gives it back. 200,000 reads kept about 67 MB. design.md says so.
+		- 20261016: JC OK'd `SHCLW_SHCL`. README.md has a C section now that says how to set it, checked by building its commands and example on all 3 versions.
 	- Decisions:
 		- A program on 1.2 or 2.0 sets `SHCLW_SHCL` to 1 or 2, since their `shcl.h` files define the same macros. With none the build stops and says to set it. A wrong one fails to compile, on a call only 2.0 declares. 3.0 needs none. That settles the open question in design.md, which moved to Decisions.
 		- 2.0's save goes through shcl's own atomic write, as Go's does. So `shclw2.c` won't build with `SHCL_NO_FILE_IO`, and says why.
@@ -370,7 +371,7 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Commit: c003a9f
 	- Test case: `make pick`, `test_save`, and the 1.2 and 2.0 sides of `test_errors`, `test_upgrade`, `test_info`, and `test_rewrites` in `source/c/tests/api_test.c`. The shared cases on all 3 versions through `cicd/c_cases.py`.
 	- Swept: every row of design.md's "evens out" table has a case or an API test that runs on C 1.2 and 2.0, but the 2.x upgrade refusal, which is 3.0's alone. Every call `shclw3.c` defines is in `shclw1.c` and `shclw2.c`, which each link checks. The notes in `shclw.h` and design.md that hold only on 3.0 now say so.
-	- Acceptance signoff: Waiting. The `SHCLW_SHCL` macro, and leaving the 1.2 and 2.0 memory growth as a documented limit, were choices.
+	- Acceptance signoff: Waiting. Leaving the 1.2 and 2.0 memory growth as a documented limit was a choice.
 
 - PutSyntax doesn't read its value back
 	- ID: 2026101513330007
@@ -456,32 +457,6 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Sweep: Put, PutSyntax, and Comment in Go `shclw1` and `shclw2`, and Rust `v1` and `v2`.
 	- Swept: Put, PutSyntax, Comment, and Remove in Go `shclw1` to `shclw3` and Rust `v1` to `v3`, each on the first, an inner, and the last step of a path, with the rest there and not there. 3.0 needs no check of its own, since shcl 3.0 refuses these itself, and the test walks it too. Remove takes every instance on every version, as decided. No other `Doc` or `ShclDoc` method edits the document. `Write` and `UpgradeFile` take a file path, not a document path.
 	- Acceptance signoff: Waiting. `First` and `Last` now give a narrowed path for a single instance, which changes what design.md said.
-
-- FormatOf reads a Format line inside a raw block on 1.2 and 2.0
-	- ID: 2026101515553202
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Severity: Avg
-	- Opened: 20261015-155532
-	- Opened by: JC
-	- Steps to reproduce:
-		- On 1.2 or 2.0, open a file whose raw block has a `##    Format   9` line in its body, as in case 022.
-	- Incorrect behavior: `FormatOf` gives 9, so `Open` refuses the file as too new.
-	- Expected behavior: Lines inside a raw body don't count, the same as on 3.0.
-	- Note: found while building the info block. The block finder in `shclw/info.go` and `src/info.rs` already skips raw bodies.
-	- Reproduced: 20261015, on 1.2 and 2.0 in Go and Rust. `FormatOf` gave 9, and `Open` and `Upgrade` with `from` 0 said too new. 3.0 gave 0.
-	- Actual cause:
-		- 1.2 and 2.0 read the Format line with a plain text scan of every line, which can't see raw bodies.
-	- Decisions:
-		- `FormatOf` on 1.2 and 2.0 now goes through the same check the info block uses: a Format line counts only when taking it out leaves every value and error the same.
-		- It also reads the line the way 3.0 and the info block do: indented or not, digits only. Before, only a line at the left edge counted, and `+9` or extra blanks read as 9. With several lines, the first naming the bound format or newer wins, else the highest, as 3.0 picks.
-	- Actual fix: One shared routine in `shclw/info.go` and `src/info.rs` finds the Format lines that count, for both `FormatOf` and the save's check. The old text scan is gone.
-	- Verified: the gate and a 20 second fuzz, Go against Rust, with no difference. No existing want file changed.
-	- Branch: formatof
-	- Commit: 909d0c6
-	- Test case: tests/cases/028-format-raw, and Go `TestOpen` and Rust `open` with a Format line in a raw body, and a real one after it. They failed before the fix on 1.2 and 2.0 in Go and Rust, and pass after.
-	- Swept: `Open`, `OpenWith`, `Upgrade`, and `UpgradeFile` in Go `shclw1` to `shclw3` and Rust `v1` to `v3` all go through that version's `FormatOf`, and so does the `format` op. 3.0's is shcl's own, which already skips raw bodies.
-	- Acceptance signoff: Waiting. The line is now read as 3.0 reads it, which is wider than the item.
 
 - C: strings with lengths
 	- ID: 2026101513330047
@@ -919,6 +894,21 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Parent ID: 2026101512024159
 	- Note: Cobblevale compiles shcl in one file with `SHCL_NO_FILE_IO`, since the file calls pull in `windows.h`, adn writes files itself. Write would need its own code for that build.
 
+- C: build 3.0 without shcl 2.0
+	- ID: 2026101611292826
+	- Type: Feature
+	- Status: Queued
+	- Priority: Avg
+	- Opened: 20261016-112928
+	- Opened by: JC
+	- Parent ID: 2026101512024159
+	- Related IDs: 2026101516111033, 2026101513330048, 2026101513330049
+	- Requirements:
+		- A macro that leaves the `shclw3_v2` files and 2.0's `shcl.h` out of a 3.0 build.
+		- An upgrade of a 2.x file in that build doesn't pass along lines 2.0 would have refused.
+	- Note: Both C programs are on 3.0, and moving onto the wrapper would build 2.0 into each. Cobblevale builds shcl inside an Unreal module with `SHCL_NO_FILE_IO`. 2.0 ends the program when memory runs out.
+	- Note: Still open is whether, without 2.0, an upgrade of a 2.x file is refused, or goes ahead marked unchecked.
+
 - Write into a folder that doesn't exist says IO on 1.2 and 2.0, and NotFound on 3.0
 	- ID: 2026101518385490
 	- Type: Bug
@@ -1139,6 +1129,33 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Swept: Go `Normalize` is the only float32 path. Rust has only `From<f32>`. Neither takes a float32 slice.
 	- Closed: 20261015-140716
 	- Acceptance signoff: Self-closed: did what the item asked, and its test failed before and passes after.
+
+- FormatOf reads a Format line inside a raw block on 1.2 and 2.0
+	- ID: 2026101515553202
+	- Type: Bug
+	- Status: Done
+	- Severity: Avg
+	- Opened: 20261015-155532
+	- Opened by: JC
+	- Steps to reproduce:
+		- On 1.2 or 2.0, open a file whose raw block has a `##    Format   9` line in its body, as in case 022.
+	- Incorrect behavior: `FormatOf` gives 9, so `Open` refuses the file as too new.
+	- Expected behavior: Lines inside a raw body don't count, the same as on 3.0.
+	- Note: found while building the info block. The block finder in `shclw/info.go` and `src/info.rs` already skips raw bodies.
+	- Reproduced: 20261015, on 1.2 and 2.0 in Go and Rust. `FormatOf` gave 9, and `Open` and `Upgrade` with `from` 0 said too new. 3.0 gave 0.
+	- Actual cause:
+		- 1.2 and 2.0 read the Format line with a plain text scan of every line, which can't see raw bodies.
+	- Decisions:
+		- `FormatOf` on 1.2 and 2.0 now goes through the same check the info block uses: a Format line counts only when taking it out leaves every value and error the same.
+		- It also reads the line the way 3.0 and the info block do: indented or not, digits only. Before, only a line at the left edge counted, and `+9` or extra blanks read as 9. With several lines, the first naming the bound format or newer wins, else the highest, as 3.0 picks.
+	- Actual fix: One shared routine in `shclw/info.go` and `src/info.rs` finds the Format lines that count, for both `FormatOf` and the save's check. The old text scan is gone.
+	- Verified: the gate and a 20 second fuzz, Go against Rust, with no difference. No existing want file changed.
+	- Branch: formatof
+	- Commit: 909d0c6
+	- Test case: tests/cases/028-format-raw, and Go `TestOpen` and Rust `open` with a Format line in a raw body, and a real one after it. They failed before the fix on 1.2 and 2.0 in Go and Rust, and pass after.
+	- Swept: `Open`, `OpenWith`, `Upgrade`, and `UpgradeFile` in Go `shclw1` to `shclw3` and Rust `v1` to `v3` all go through that version's `FormatOf`, and so does the `format` op. 3.0's is shcl's own, which already skips raw bodies.
+	- Acceptance signoff: 20261016, JC left the wider read to judgement. It stays, since every version now gives the same answer for the same file.
+	- Closed: 20261016-112928
 
 - Tests for upgrade and save failures
 	- ID: 2026101512024169

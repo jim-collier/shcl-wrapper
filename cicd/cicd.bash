@@ -25,7 +25,8 @@
 ##	  for Go's fuzzer. Failing fuzz cases go to cicd/artifacts/fuzz/.
 ##	- Test scratch goes under $TMPDIR, in a folder the run makes and removes.
 ##	- C builds against the shcl.h pinned in source/c/shcl-pins.env, fetched by
-##	  commit into cicd/cache/ and checked by sha256.
+##	  commit into cicd/cache/ and checked by sha256. The 3.0 build takes 2.0's
+##	  too, for the upgrade check.
 
 ##	History: At bottom of script.
 
@@ -195,7 +196,8 @@ fEcho "OK: go vet, staticcheck"
 (cd "${root}/source/rust" && cargo clippy --quiet -j "${cpuCap}" --all-features --all-targets -- -D warnings -W clippy::pedantic)
 fEcho "OK: clippy"
 fShclHeader "${SHCL3_REV}" "${SHCL3_SHA256}"; shcl3Dir="${shclDir}"
-make -s -C "${root}/source/c" SHCL_DIR="${shcl3Dir}" lint strict
+fShclHeader "${SHCL2_REV}" "${SHCL2_SHA256}"; shcl2Dir="${shclDir}"
+make -s -C "${root}/source/c" SHCL_DIR="${shcl3Dir}" SHCL2_DIR="${shcl2Dir}" lint strict
 fEcho "OK: clang-tidy, and gcc-15 at C17 (C over shcl 3.0)"
 mapfile -t shellFiles < <(find "${root}/cicd" -type f \( -name '*.bash' -o -path '*/hooks/*' \) | sort)
 ((${#shellFiles[@]})) || fDie "shellcheck found no files"
@@ -211,9 +213,8 @@ fSection "3/4  Tests"
 fEcho "OK: Go tests"
 (cd "${root}/source/rust" && TMPDIR="${work}" cargo test --quiet -j "${cpuCap}" --all-features)
 fEcho "OK: Rust tests"
-TMPDIR="${work}" make -s -C "${root}/source/c" -j "${cpuCap}" SHCL_DIR="${shcl3Dir}" OUT="${work}/c3" test drive
+TMPDIR="${work}" make -s -C "${root}/source/c" -j "${cpuCap}" SHCL_DIR="${shcl3Dir}" SHCL2_DIR="${shcl2Dir}" OUT="${work}/c3" test drive
 fEcho "OK: C API tests over shcl 3.0, sanitized, plain, and as C++"
-## C has only some ops so far. c_cases.py lists, per case, the ops it skipped.
 TMPDIR="${work}" python3 "${here}/c_cases.py" --drive "${work}/c3/shclw-drive" --version 3 --cases "${root}/tests/cases"
 fEcho "OK: C shared cases over shcl 3.0"
 
@@ -244,3 +245,4 @@ fEcho_Clean
 ##	History:
 ##		- 2026-10-15 JC: Created. Format, lint, shared cases, and Go-against-Rust fuzz for the Go and Rust wrappers.
 ##		- 2026-10-15 JC: C over shcl 3.0: clang-format, clang-tidy, gcc-15, sanitized API tests, a C++ build, and the shared cases.
+##		- 2026-10-15 JC: The C 3.0 build fetches shcl 2.0's shcl.h too, for the upgrade check.

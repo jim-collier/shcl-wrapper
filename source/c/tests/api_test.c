@@ -14,6 +14,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <dirent.h>
+#include <signal.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #if defined(__GLIBC__)
@@ -687,8 +692,387 @@ static void test_saves_give_back(void) {
 #endif
 }
 
+static void path_in(char *out, size_t cap, const char *dir, const char *name) {
+	CHECK(snprintf(out, cap, "%s/%s", dir, name) < (int)cap);
+}
+
+// A folder of its own under scratch, which drop_dir takes away again.
+static void make_dir(char *out, size_t cap, const char *name) {
+	path_in(out, cap, scratch, name);
+	CHECK(mkdir(out, 0755) == 0);
+}
+
+static size_t count_dir(const char *dir) {
+	DIR *d = opendir(dir);
+	size_t n = 0;
+	for (struct dirent *e = d ? readdir(d) : NULL; e; e = readdir(d)) {
+		n += strcmp(e->d_name, ".") != 0 && strcmp(e->d_name, "..") != 0;
+	}
+	if (d) {
+		(void)closedir(d);
+	}
+	return n;
+}
+
+static void drop_dir(const char *dir) {
+	DIR *d = opendir(dir);
+	for (struct dirent *e = d ? readdir(d) : NULL; e; e = readdir(d)) {
+		if (strcmp(e->d_name, ".") != 0 && strcmp(e->d_name, "..") != 0) {
+			char path[8192];
+			path_in(path, sizeof path, dir, e->d_name);
+			CHECK(unlink(path) == 0 || rmdir(path) == 0);
+		}
+	}
+	if (d) {
+		(void)closedir(d);
+	}
+	CHECK(rmdir(dir) == 0);
+}
+
+static void write_mode(const char *path, const char *text, mode_t mode) {
+	FILE *f = fopen(path, "wb");
+	CHECK(f != NULL);
+	if (f) {
+		CHECK(fwrite(text, 1, strlen(text), f) == strlen(text));
+		CHECK(fclose(f) == 0);
+	}
+	CHECK(chmod(path, mode) == 0);
+}
+
+static bool file_is(const char *path, const char *want) {
+	char *text = NULL;
+	size_t len = 0;
+	bool same = shclw_read_text(path, &text, &len, NULL) == SHCLW_OK && len == strlen(want) && !memcmp(text, want, len);
+	free(text);
+	return same;
+}
+
+static mode_t mode_of(const char *path) {
+	struct stat st;
+	return stat(path, &st) == 0 ? st.st_mode & 0777 : 0;
+}
+
+// What the replacer's steps do, per step of test_replace_read.
+typedef struct {
+	char bak[8192];
+	const char *was;
+	int backup;
+	int write;
+	bool backed_up;
+} replace_test;
+
+enum { BACKUP_OK, BACKUP_EDITS, BACKUP_TAKEN };
+enum { WRITE_OK, WRITE_FAILS, WRITE_TAKES_FILE, WRITE_HALF };
+
+static shclw_kind test_backup(void *ctx, char **name, shclw_error *err) {
+	replace_test *t = (replace_test *)ctx;
+	t->backed_up = true;
+	if (t->backup == BACKUP_TAKEN) {
+		return shclw_i_fail(err, SHCLW_ERR_BACKUP_TAKEN, t->bak, NULL, 0);
+	}
+	write_mode(t->bak, t->was, 0640);
+	if (t->backup == BACKUP_EDITS) {
+		char path[8192];
+		CHECK(snprintf(path, sizeof path, "%.*s/c.shcl", (int)(strrchr(t->bak, '/') - t->bak), t->bak) > 0);
+		write_mode(path, "a: 3\n", 0640);
+	}
+	*name = shclw_i_dup(t->bak, strlen(t->bak), NULL);
+	return shclw_i_ok(err);
+}
+
+static shclw_kind test_write(void *ctx, const char *path, const char *data, size_t len, shclw_error *err) {
+	const replace_test *t = (const replace_test *)ctx;
+	switch (t->write) {
+	case WRITE_FAILS: return shclw_i_fail(err, SHCLW_ERR_IO, path, "boom", 0);
+	case WRITE_TAKES_FILE: CHECK(unlink(path) == 0); return shclw_i_fail(err, SHCLW_ERR_IO, path, "boom", 0);
+	case WRITE_HALF: write_mode(path, "a:", 0640); return shclw_i_fail(err, SHCLW_ERR_IO, path, "boom", 0);
+	default: break;
+	}
+	FILE *f = fopen(path, "wb");
+	CHECK(f && fwrite(data, 1, len, f) == len);
+	if (f) {
+		CHECK(fclose(f) == 0);
+	}
+	return shclw_i_ok(err);
+}
+
+// Go's TestReplaceRead, step by step.
+static void test_replace_read(void) {
+	static const char was[] = "a: 1\n", now[] = "a: 2\n";
+	static const struct {
+		const char *name;
+		const char *read;
+		int backup;
+		int write;
+		bool no_backup;
+	} steps[] = {
+		{"ok", was, BACKUP_OK, WRITE_OK, false},
+		{"changed before", "a: 0\n", BACKUP_OK, WRITE_OK, false},
+		{"changed during backup", was, BACKUP_EDITS, WRITE_OK, false},
+		{"backup fails", was, BACKUP_TAKEN, WRITE_OK, false},
+		{"write fails", was, BACKUP_OK, WRITE_FAILS, false},
+		{"write fails and takes the file", was, BACKUP_OK, WRITE_TAKES_FILE, false},
+		{"write fails part way", was, BACKUP_OK, WRITE_HALF, false},
+		{"no backup", was, BACKUP_OK, WRITE_OK, true},
+	};
+	for (size_t i = 0; i < sizeof steps / sizeof steps[0]; i++) {
+		char dir[4200], path[8192];
+		char sub[32];
+		(void)snprintf(sub, sizeof sub, "replace%zu", i);
+		make_dir(dir, sizeof dir, sub);
+		path_in(path, sizeof path, dir, "c.shcl");
+		write_mode(path, was, 0640);
+		replace_test t;
+		memset(&t, 0, sizeof t);
+		path_in(t.bak, sizeof t.bak, dir, "c.bak");
+		t.was = was;
+		t.backup = steps[i].backup;
+		t.write = steps[i].write;
+		shclw_i_replacer how = {steps[i].no_backup ? NULL : test_backup, test_write, &t};
+		char *name = NULL;
+		shclw_error err;
+		shclw_kind k =
+			shclw_i_replace_read(path, steps[i].read, strlen(steps[i].read), now, strlen(now), &how, &name, &err);
+		bool ok = false;
+		switch (i) {
+		case 0: ok = k == SHCLW_OK && name && file_is(path, now) && file_is(name, was); break;
+		case 1: ok = k == SHCLW_ERR_IO && !t.backed_up && file_is(path, was) && count_dir(dir) == 1; break;
+		case 2: ok = k == SHCLW_ERR_IO && file_is(path, "a: 3\n") && count_dir(dir) == 1; break;
+		case 3: ok = k == SHCLW_ERR_BACKUP_TAKEN && file_is(path, was) && count_dir(dir) == 1; break;
+		case 4: ok = k == SHCLW_ERR_IO && strstr(err.msg, "boom") && file_is(path, was) && count_dir(dir) == 1; break;
+		case 5:
+			ok = k == SHCLW_ERR_IO && file_is(path, was) && mode_of(path) == 0640 && count_dir(dir) == 1 &&
+			     strstr(err.msg, "put back");
+			break;
+		case 6: ok = k == SHCLW_ERR_IO && !name && strstr(err.msg, t.bak) && file_is(t.bak, was); break;
+		default: ok = k == SHCLW_OK && !name && file_is(path, now) && count_dir(dir) == 1; break;
+		}
+		if (!ok) {
+			(void)fprintf(stderr, "replace read, %s: %s, %s\n", steps[i].name, shclw_kind_name(k), err.msg);
+		}
+		CHECK(ok);
+		free(name);
+		drop_dir(dir);
+	}
+}
+
+static const char clean2x[] = "tags: a, b\n";
+static const char clean2to[] = "tags: [a, b]\n";
+
+// A 2.x file shcl 2.0 reported errors on is refused, with 2.0's errors, and a
+// file upgrade leaves it as it was, with no backup.
+static void test_upgrade(void) {
+	static const struct {
+		const char *text;
+		size_t line;
+	} old[] = {{"a: 1\nb: ```\nraw line\nc: 2\n", 2}, {"x: [ab]\ny: 1\n", 1}};
+	for (size_t i = 0; i < sizeof old / sizeof old[0]; i++) {
+		const char *text = old[i].text;
+		shclw_error err;
+		shclw_upgraded *u = NULL;
+		CHECK(shclw_upgrade(text, strlen(text), 2, &u, &err) == SHCLW_ERR_REFUSED);
+		CHECK(u && u->n_diags > 0 && u->diags[0].line == old[i].line && u->diags[0].severity == SHCLW_SEV_ERROR);
+		CHECK(u && !u->changed && u->from == 2 && u->text.n == strlen(text) && !strcmp(u->text.p, text));
+		CHECK(strstr(err.msg, "shcl 2.0 reports errors on 1 lines") != NULL);
+		free(u);
+
+		char dir[4200], path[8192];
+		make_dir(dir, sizeof dir, "refused");
+		path_in(path, sizeof path, dir, "c.shcl");
+		write_mode(path, text, 0644);
+		u = NULL;
+		CHECK(shclw_upgrade_file(path, 2, &u, &err) == SHCLW_ERR_REFUSED);
+		CHECK(u && u->n_diags > 0 && u->text.n == 0 && u->backup.n == 0 && strstr(err.msg, path));
+		CHECK(file_is(path, text) && count_dir(dir) == 1);
+		free(u);
+		drop_dir(dir);
+	}
+
+	shclw_upgraded *u = NULL;
+	CHECK(shclw_upgrade(clean2x, strlen(clean2x), 2, &u, NULL) == SHCLW_OK);
+	CHECK(u && u->changed && u->from == 2 && !strncmp(u->text.p, clean2to, strlen(clean2to)) && !u->n_diags);
+	CHECK(u && u->backup.n == 0 && u->backup.p[0] == '\0' && !u->diags);
+	free(u);
+
+	static const char two_ways[] = "x: [ab]\ny: 1\nz: [ab] c\n";
+	CHECK(shclw_upgrade(two_ways, strlen(two_ways), 0, &u, NULL) == SHCLW_ERR_AMBIGUOUS && u != NULL);
+	free(u);
+	static const char newer[] = "a: 1\n##    Format   9\n";
+	CHECK(shclw_upgrade(newer, strlen(newer), 0, &u, NULL) == SHCLW_ERR_TOO_NEW && u && u->from == 9);
+	free(u);
+	CHECK(shclw_upgrade("a: 1\n", 5, 9, &u, NULL) == SHCLW_ERR_TOO_NEW && u && u->from == 9);
+	free(u);
+	CHECK(shclw_upgrade(NULL, 0, 0, &u, NULL) == SHCLW_OK && u && !u->changed && u->from == 3 && u->text.n == 0);
+	free(u);
+}
+
+static void test_upgrade_file(void) {
+	char dir[4200], path[8192];
+	make_dir(dir, sizeof dir, "real");
+	path_in(path, sizeof path, dir, "c.shcl");
+	write_mode(path, clean2x, 0600);
+	shclw_error err;
+	shclw_upgraded *u = NULL;
+	CHECK(shclw_upgrade_file(path, 2, &u, &err) == SHCLW_OK);
+	CHECK(u && u->changed && u->from == 2 && !strncmp(u->text.p, clean2to, strlen(clean2to)));
+	CHECK(u && shclw_format_of(u->text.p, u->text.n) == 3 && file_is(path, u->text.p));
+	CHECK(u && !strncmp(u->backup.p, dir, strlen(dir)) && u->backup.p[strlen(dir)] == '/');
+	CHECK(u && file_is(u->backup.p, clean2x) && mode_of(u->backup.p) == 0600 && mode_of(path) == 0600);
+	CHECK(count_dir(dir) == 2);
+	free(u);
+	CHECK(shclw_upgrade_file(path, 0, &u, NULL) == SHCLW_OK && u && !u->changed && u->backup.n == 0);
+	CHECK(count_dir(dir) == 2);
+	free(u);
+
+	static const char newer[] = "a: 1\n##    Format   9\n";
+	write_mode(path, newer, 0644);
+	CHECK(shclw_upgrade_file(path, 0, &u, &err) == SHCLW_ERR_TOO_NEW && u && u->from == 9 && file_is(path, newer));
+	free(u);
+	CHECK(shclw_upgrade_file(path, 9, &u, NULL) == SHCLW_ERR_TOO_NEW && u && u->from == 9);
+	free(u);
+	CHECK(shclw_upgrade_file(in_scratch("missing.shcl"), 2, &u, NULL) == SHCLW_ERR_NOT_FOUND && u && !u->from);
+	free(u);
+	CHECK(shclw_upgrade_file(dir, 2, &u, &err) == SHCLW_ERR_IO && u && strstr(err.msg, "not a regular file"));
+	free(u);
+	drop_dir(dir);
+
+	// Something already at the backup's name is never written over. The name
+	// has the time in it to the second, so a tick between taking it and the
+	// upgrade makes another; go again then.
+	make_dir(dir, sizeof dir, "taken");
+	path_in(path, sizeof path, dir, "c.shcl");
+	bool tried = false;
+	for (int i = 0; i < 3 && !tried; i++) {
+		write_mode(path, clean2x, 0644);
+		char *name = shcl_backup_file_name(path, 2);
+		write_mode(name, "mine\n", 0644);
+		shclw_kind k = shclw_upgrade_file(path, 2, &u, NULL);
+		char *after = shcl_backup_file_name(path, 2);
+		if (!strcmp(name, after)) {
+			tried = true;
+			CHECK(k == SHCLW_ERR_BACKUP_TAKEN && file_is(path, clean2x) && file_is(name, "mine\n"));
+			CHECK(count_dir(dir) == 2);
+		}
+		free(u);
+		free(name);
+		free(after);
+		drop_dir(dir);
+		make_dir(dir, sizeof dir, "taken");
+	}
+	CHECK(tried);
+	drop_dir(dir);
+}
+
+// An edit made while the upgrade runs must not get past the 2.0 check. The
+// file flips between a clean 2.x text and one 2.0 has errors on, so a backup
+// holding the bad text means that text was converted unchecked.
+static void test_upgrade_raced(void) {
+	static const char bad[] = "x: [ab]\ny: 1\n";
+	char root[4200];
+	make_dir(root, sizeof root, "raced");
+	int upgraded = 0;
+	for (int i = 0; i < 100; i++) {
+		char dir[8192], path[8300], flip[8300];
+		char sub[16];
+		(void)snprintf(sub, sizeof sub, "%d", i);
+		path_in(dir, sizeof dir, root, sub);
+		CHECK(mkdir(dir, 0755) == 0);
+		path_in(path, sizeof path, dir, "c.shcl");
+		path_in(flip, sizeof flip, dir, "flip");
+		write_mode(path, clean2x, 0644);
+		pid_t pid = fork();
+		if (pid == 0) {
+			for (unsigned n = 0;; n++) {
+				const char *t = n % 2 ? clean2x : bad;
+				FILE *f = fopen(flip, "wb");
+				if (!f || fwrite(t, 1, strlen(t), f) != strlen(t) || fclose(f) != 0 || rename(flip, path) != 0) {
+					_exit(0);
+				}
+			}
+		}
+		CHECK(pid > 0);
+		shclw_upgraded *u = NULL;
+		shclw_kind k = shclw_upgrade_file(path, 2, &u, NULL);
+		if (pid > 0) {
+			(void)kill(pid, SIGKILL);
+			(void)waitpid(pid, NULL, 0);
+		}
+		if (k == SHCLW_OK && u && u->backup.n) {
+			upgraded++;
+			if (!file_is(u->backup.p, clean2x)) {
+				(void)fprintf(stderr, "round %d: the backup isn't the clean text, so another was converted\n", i);
+				CHECK(false);
+			}
+		}
+		free(u);
+		drop_dir(dir);
+	}
+	CHECK(upgraded > 0);
+	drop_dir(root);
+}
+
+// An edit after InfoBlock that names a newer format leaves Text without the
+// block, and Write refuses, writing nothing. One naming an older format is
+// refused at the call.
+static void test_info(void) {
+	shclw_doc *d = parse_z("a: 1\n");
+	CHECK(shclw_info_block(d, true, NULL) == SHCLW_OK);
+	CHECK(text_is(d, "a: 1\n\n" SHCL_GEN_BANNER));
+	static const char line[] = "##    Format   9";
+	CHECK(shclw_comment(d, "a", line, sizeof line - 1, NULL) == SHCLW_OK);
+	size_t len = 0;
+	char *t = shclw_text(d, &len);
+	CHECK(t && !strstr(t, "SHCL"));
+	free(t);
+	shclw_error err;
+	CHECK(shclw_write(d, in_scratch("info.shcl"), &err) == SHCLW_ERR_TOO_NEW && strstr(err.msg, "info.shcl"));
+	CHECK(access(in_scratch("info.shcl"), F_OK) != 0);
+	shclw_free(d);
+
+	d = parse_z("a: 1\n##    Format   2\n");
+	CHECK(shclw_info_block(d, false, &err) == SHCLW_ERR_REFUSED && strstr(err.msg, "upgrade it first"));
+	CHECK(shclw_stamp_format(d, NULL) == SHCLW_ERR_REFUSED);
+	CHECK(text_is(d, "a: 1\n##    Format   2\n"));
+	shclw_free(d);
+
+	d = parse_z("a: 1\n");
+	CHECK(shclw_stamp_format(d, NULL) == SHCLW_OK && text_is(d, "a: 1\n##    Format   3\n"));
+	CHECK(shclw_get_int(d, "a").line == 1 && shclw_errors(d) == 0);
+	shclw_free(d);
+}
+
+// A new document has no lines of its own to keep, so it never rewrites, and
+// 3.0 keeps the lines of a load at any strictness.
+static void test_rewrites(void) {
+	shclw_doc *d = shclw_new();
+	CHECK(shclw_put_int(d, "a.b", 1, NULL) == SHCLW_OK && !shclw_rewrites(d));
+	shclw_free(d);
+	static const char loose[] = "a:   1\n";
+	CHECK(shclw_parse_with(loose, sizeof loose - 1, SHCLW_LOOSE, &d, NULL) == SHCLW_OK && !shclw_rewrites(d));
+	shclw_free(d);
+}
+
+static void test_check(void) {
+	shclw_doc *d = parse_z("port: 80\nportt: 81\nname: x\nname: y\n");
+	shclw_doc *schema = parse_z("field: port\n\ttype: int\n\tmin: 1\nfield: name\n\ttype: string\n\trepeat: [0, 10]\n");
+	size_t n = 0;
+	shclw_diag *ds = shclw_check(d, schema, &n);
+	CHECK(ds && n == 1 && ds[0].line == 2 && !strcmp(ds[0].code.p, "V001"));
+	free(ds);
+	ds = shclw_diags(d, &n);
+	CHECK(ds && n == 1 && !strcmp(ds[0].code.p, "H001"));
+	free(ds);
+	shclw_drop_declared(schema, d);
+	ds = shclw_diags(d, &n);
+	CHECK(ds && n == 0);
+	free(ds);
+	shclw_free(schema);
+	shclw_free(d);
+}
+
 static void cleanup(void) {
 	static const char *const made[] = {"nul.shcl", "bad.shcl", "newer.shcl", "good.shcl", "strict.shcl", "loop.shcl"};
+	// Each test from test_replace_read on takes away its own folders.
 	for (size_t i = 0; i < sizeof made / sizeof made[0]; i++) {
 		if (unlink(in_scratch(made[i])) != 0 && errno != ENOENT) {
 			(void)fprintf(stderr, "couldn't remove %s\n", in_scratch(made[i]));
@@ -719,6 +1103,13 @@ int main(void) {
 	test_shortest();
 	test_several();
 	test_saves_give_back();
+	test_replace_read();
+	test_upgrade();
+	test_upgrade_file();
+	test_upgrade_raced();
+	test_info();
+	test_rewrites();
+	test_check();
 	cleanup();
 	if (failures) {
 		(void)fprintf(stderr, "api: %d failed\n", failures);

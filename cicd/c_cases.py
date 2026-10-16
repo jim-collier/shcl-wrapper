@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 ## Purpose: Runs the shared cases through the C driver and compares with the
-##	want files Go writes, op by op. An op the C wrapper doesn't have yet
-##	answers "error notyet", and so does every op after one that would have
-##	changed the document, until a parse starts over. Those are listed per
-##	case, so none are left out without a word. Everything else has to match.
+##	want files Go writes, op by op. Every op has to match.
 ## Copyright © 2026 Jim Collier [ID: 2უNაɘ«҂թȹɤξπ๙¿ձϖ]
 ## SPDX-License-Identifier: MIT
 
@@ -16,8 +13,6 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
-NOT_YET = "error notyet"
 
 
 def split_version(name: str) -> tuple[str, int]:
@@ -74,7 +69,6 @@ def main() -> int:
 
 	failures: list[str] = []
 	ran = full = 0
-	pending: dict[str, int] = {}
 	with tempfile.TemporaryDirectory(prefix="shclw-c-cases-") as tmp:
 		for case in sorted(p for p in args.cases.iterdir() if p.is_dir()):
 			label = f"{case.name}/v{args.version}"
@@ -103,32 +97,15 @@ def main() -> int:
 			if got_blocks is None or want_blocks is None:
 				failures.append(f"{label}: the ops echoed differ from the want file")
 				continue
-			missing: list[str] = []
-			after: list[str] = []
+			wrong = 0
 			for echo, g, w in zip(echoes, got_blocks, want_blocks, strict=True):
-				op = echo[2:].split("\t")[0]
-				if g == [NOT_YET]:
-					missing.append(op)
-					pending[op] = pending.get(op, 0) + 1
-				elif len(g) == 1 and g[0].startswith(NOT_YET + " after "):
-					after.append(op)
-				elif g != w:
+				if g != w:
+					wrong += 1
 					failures.append(f"{label}: {echo!r}\n  want: {w}\n  got:  {g}")
-			compared = len(echoes) - len(missing) - len(after)
-			ran += compared
-			if compared == len(echoes):
-				full += 1
-				print(f"  {label}: all {compared} ops")
-				continue
-			line = f"  {label}: {compared} of {len(echoes)} ops; not in C yet: {' '.join(missing)}"
-			if after:
-				line += f"; skipped after those: {' '.join(after)}"
-			print(line)
+			ran += len(echoes)
+			full += wrong == 0
 
 	print(f"C cases: {full} whole, {ran} ops compared")
-	if pending:
-		print("Ops not in C yet, with how many times the cases skipped one: ", end="")
-		print(", ".join(f"{op} {n}" for op, n in sorted(pending.items())))
 	if ran == 0:
 		failures.append("no op was compared")
 	for f in failures:

@@ -6,7 +6,7 @@
 <!-- TOC ignore:true -->
 # Design
 
-Status: draft, 2026-10-15. Go and Rust are built over shcl 1.2, 2.0, and 3.0. C has loading, saving, reads, walking, and writes over 3.0, and the rest of it is in the backlog with Python and shcl 4.
+Status: draft, 2026-10-15. Go and Rust are built over shcl 1.2, 2.0, and 3.0. C has the whole API over 3.0, and C over 1.2 and 2.0 is in the backlog with Python and shcl 4.
 
 <!-- TOC ignore:true -->
 ## Table of contents
@@ -97,7 +97,8 @@ Status: draft, 2026-10-15. Go and Rust are built over shcl 1.2, 2.0, and 3.0. C 
 
 - Each version's code is a copy of the one before with its differences made, so a reader sees the whole adapter in one file.
 
-- C has one header, `shclw.h`, which includes the program's own `shcl.h` and works out its version from what it declares. `shclw.c` has what every version shares, and each version has its own adapter file, `shclw3.c` for 3.0, as Go has a package. A program builds `shclw.c` and the one adapter that matches its `shcl.h`. Built against another version, the adapter stops the build with an error. `run.c` has `shclw_run` and is only needed for ops scripts.
+- C has one header, `shclw.h`, which includes the program's own `shcl.h` and works out its version from what it declares. `shclw.c` has what every version shares, and each version has its own adapter file, `shclw3.c` for 3.0, as Go has a package. A program builds `shclw.c`, `info.c`, and the one adapter that matches its `shcl.h`. Built against another version, the adapter stops the build with an error. `run.c` has `shclw_run` and is only needed for ops scripts.
+	- On 3.0 the program also builds `shclw3_v2.c` and `shclw3_v2_impl.c`, with shcl 2.0's `shcl.h` on their include path, for the upgrade check.
 	- The header is usable from C++, and the build compiles every C file as C++ too.
 
 ## API
@@ -207,6 +208,7 @@ Go names are listed. Rust uses the same words in snake case, and `ShclDoc` has t
 	- A file whose Format line names a newer format is `ErrTooNew`, as `Upgrade` says, and anything that isn't a regular file is `ErrIO`.
 	- A file taken as 2.x that shcl 2.0 reports errors on is `ErrRefused`, with those errors in the error's `Diags`. Nothing is written and no backup is made. 2.0 read such a line the way it repaired it, or not at all, and a raw block that never closes took the rest of the file. The upgrade would make a clean file out of it that means something else.
 	- That check needs shcl 2.0, so the 3.0 adapter builds it in too. In Rust the `shcl3` feature turns on `shcl2`.
+	- In C, 2.0's `shcl.h` and 3.0's declare the same names, so 2.0's goes in 2 files of its own with each call renamed. The C upgrade gives 2.0's errors in its result, `shclw_upgraded`, since C's error has no list.
 	- 1.2 and 2.0 have nothing to upgrade. They hand the text back, or refuse a newer file with `ErrTooNew`.
 
 - `d.InfoBlock(on)` puts the info block at the end of what the save writes, or with `on` false leaves it out.
@@ -242,7 +244,6 @@ Go names are listed. Rust uses the same words in snake case, and `ShclDoc` has t
 - `ShclVersion` and `FormatMajor` say what's underneath.
 
 - `shclw.Run` takes an ops script, described below. It's the test driver's engine, and also a way to run a list of edits written as text.
-	- C's `shclw_run` answers `error notyet` for an op C doesn't have yet. After one that would have changed the document, it answers `error notyet after OP` for every op until a `parse` starts over. That's only while C is partly built.
 
 ## What the wrapper evens out
 
@@ -320,7 +321,7 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 
 - Every feature and every fix gets a case, or a line in an existing one.
 
-- C runs the same cases through its driver with `cicd/c_cases.py`, op by op against the same want files. An op C doesn't have yet, and what comes after one that would have changed the document, is skipped and listed by name, case by case, so nothing is left out without a word.
+- C runs the same cases through its driver with `cicd/c_cases.py`, op by op against the same want files.
 
 ### Fuzzing
 
@@ -340,7 +341,7 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 
 - Rust: a git dependency on this repo with one feature on, or a copy of `source/rust/src`.
 
-- C: a copy of `shclw.h`, `shclw_adapter.h`, `shclw.c`, and the adapter for the program's shcl, plus `run.c` for ops scripts. The program builds `shcl.h`'s own implementation once, as shcl asks.
+- C: a copy of `shclw.h`, `shclw_adapter.h`, `shclw.c`, `info.c`, and the adapter for the program's shcl, plus `run.c` for ops scripts. The program builds `shcl.h`'s own implementation once, as shcl asks. On 3.0 it also takes the `shclw3_v2` files and shcl 2.0's `shcl.h`.
 
 - A fix made in a copy goes back here, with a case, so every program gets it.
 
@@ -407,6 +408,14 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 - A C call that can fail returns a `shclw_kind`, `SHCLW_OK` on success, with details in a `shclw_error` out-parameter that may be NULL. The kinds are Go's in the same order, plus `SHCLW_ERR_NO_MEMORY`, which only C can see. A call that makes a document still gives one back on failure, empty for a file it couldn't read, as Go does.
 
 - C picks the shcl version at compile time, from what `shcl.h` declares, since that's the only place C can pick it. 3.0 is the first `shcl.h` with a version macro, `SHCL_FORMAT_MAJOR`.
+
+- C builds shcl 2.0 in beside 3.0 for the upgrade check, as Go and Rust do, rather than leave the check out of C. 2.0's calls are renamed by macros ahead of its `shcl.h`, in 2 files that never see 3.0's, so shcl isn't edited, and a build check fails on any 2.0 name left as it was.
+	- A 3.0 program then needs 2.0's `shcl.h` to build, and its code grows by 2.0's parser.
+	- 2.0 ends the program when memory runs out, where 3.0 has a hook for that.
+
+- The C upgrade gives one block, `shclw_upgraded`, and shcl 2.0's errors on a refused file are in it, rather than on the error. `shclw_error` is a fixed struct the caller never frees, and a list on it would need freeing after any call that can fail.
+
+- C's `shclw_drop_declared` takes the document and drops hints from its own diagnostics, rather than taking a list as Go and Rust do. shcl's C binding has only that form, and the match is on hint text that shcl builds inside itself.
 
 - The build gets `shcl.h` by commit, checked by sha256, into a cache the repo ignores, rather than keeping a copy of each version in the repo. That's how Go and Rust get theirs too, through their package managers. The pins are in `source/c/shcl-pins.env`.
 

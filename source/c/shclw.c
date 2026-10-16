@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 const char *shclw_status_name(shclw_status s) {
 	switch (s) {
@@ -413,6 +414,43 @@ shclw_node *shclw_i_copy_nodes(const shclw_node *nodes, size_t n, size_t *count)
 	return out;
 }
 
+shclw_diag *shclw_i_copy_diags(const shclw_diag *diags, size_t n, size_t *count) {
+	*count = 0;
+	if (n > (SIZE_MAX / 2) / sizeof(shclw_diag)) {
+		return NULL;
+	}
+	size_t bytes = n * sizeof(shclw_diag);
+	for (size_t i = 0; i < n; i++) {
+		size_t more = diags[i].code.n + diags[i].message.n + 2;
+		if (diags[i].code.n >= SIZE_MAX / 8 || diags[i].message.n >= SIZE_MAX / 8 || more >= SIZE_MAX / 2 - bytes) {
+			return NULL;
+		}
+		bytes += more;
+	}
+	shclw_diag *out = (shclw_diag *)shclw_i_alloc(bytes);
+	if (!out) {
+		return NULL;
+	}
+	char *text = (char *)(out + n);
+	for (size_t i = 0; i < n; i++) {
+		const shclw_string *from[2] = {&diags[i].code, &diags[i].message};
+		shclw_string *to[2] = {&out[i].code, &out[i].message};
+		for (size_t k = 0; k < 2; k++) {
+			if (from[k]->n) {
+				memcpy(text, from[k]->p, from[k]->n);
+			}
+			text[from[k]->n] = '\0'; // NOLINT(clang-analyzer-security.ArrayBound)
+			to[k]->p = text;
+			to[k]->n = from[k]->n;
+			text += from[k]->n + 1;
+		}
+		out[i].line = diags[i].line;
+		out[i].severity = diags[i].severity;
+	}
+	*count = n;
+	return out;
+}
+
 // Go's InFileOrder sorts by this: the line, with a put's 0 after the rest,
 // and Each order between equal lines.
 static size_t line_key(const shclw_node *node) { return node->line ? node->line : SIZE_MAX; }
@@ -740,4 +778,163 @@ shclw_kind shclw_read_text(const char *path, char **text, size_t *len, shclw_err
 	*text = buf;
 	*len = n;
 	return shclw_i_ok(err);
+}
+
+// Whether path still holds was, byte for byte.
+static bool unchanged(const char *path, const char *was, size_t was_len) {
+	FILE *f = fopen(path, "rb");
+	if (!f) {
+		return false;
+	}
+	char chunk[4096];
+	size_t at = 0;
+	bool same = true;
+	for (;;) {
+		size_t got = fread(chunk, 1, sizeof chunk, f);
+		if (got > was_len - at || (got && memcmp(chunk, was + at, got) != 0)) {
+			same = false;
+			break;
+		}
+		at += got;
+		if (got < sizeof chunk) {
+			same = !ferror(f) && at == was_len;
+			break;
+		}
+	}
+	return fclose(f) == 0 && same;
+}
+
+// Nothing at path, not even a dangling link.
+static bool missing(const char *path) {
+#ifdef _WIN32
+	struct _stat64 st;
+	return _stat64(path, &st) != 0 && errno == ENOENT;
+#else
+	struct stat st;
+	return lstat(path, &st) != 0 && errno == ENOENT;
+#endif
+}
+
+// A copy of what's still at path.
+static void drop_backup(char *name) {
+	if (name) {
+		(void)remove(name);
+		free(name);
+	}
+}
+
+static void note(shclw_error *err, const char *what, const char *name) {
+	if (!err) {
+		return;
+	}
+	size_t at = strlen(err->msg);
+	if (at < sizeof err->msg) {
+		(void)snprintf(err->msg + at, sizeof err->msg - at, "; %s%s", what, name ? name : "");
+	}
+}
+
+shclw_kind shclw_i_replace_read(const char *path, const char *was, size_t was_len, const char *data, size_t len,
+                                const shclw_i_replacer *how, char **backup_name, shclw_error *err) {
+	static const char changed[] = "changed since it was read; nothing written";
+	*backup_name = NULL;
+	if (!unchanged(path, was, was_len)) {
+		return shclw_i_fail(err, SHCLW_ERR_IO, path, changed, 0);
+	}
+	char *name = NULL;
+	if (how->backup) {
+		shclw_kind k = how->backup(how->ctx, &name, err);
+		if (k != SHCLW_OK) {
+			return k;
+		}
+	}
+	if (!unchanged(path, was, was_len)) {
+		drop_backup(name);
+		return shclw_i_fail(err, SHCLW_ERR_IO, path, changed, 0);
+	}
+	shclw_kind k = how->write(how->ctx, path, data, len, err);
+	if (k == SHCLW_OK) {
+		*backup_name = name;
+		return k;
+	}
+	if (unchanged(path, was, was_len)) {
+		drop_backup(name);
+		return k;
+	}
+	if (!name) {
+		return k;
+	}
+	// A replace that fails part way on Windows can leave nothing at path.
+	if (missing(path) && rename(name, path) == 0) {
+		note(err, "the original was put back", NULL);
+	} else {
+		note(err, "the original is ", name);
+	}
+	free(name);
+	return k;
+}
+
+shclw_upgraded *shclw_i_upgraded(const char *text, size_t len, int64_t from, bool changed, size_t unsure,
+                                 const char *backup, const shclw_diag *diags, size_t n_diags) {
+	size_t blen = backup ? strlen(backup) : 0;
+	if (len >= SIZE_MAX / 4 || blen >= SIZE_MAX / 4 || n_diags > (SIZE_MAX / 4) / sizeof(shclw_diag)) {
+		return NULL;
+	}
+	// The diagnostics go through their own block first, since its layout is
+	// shclw_i_copy_diags' to keep.
+	size_t n = 0;
+	shclw_diag *ds = shclw_i_copy_diags(diags, n_diags, &n);
+	if (!ds) {
+		return NULL;
+	}
+	size_t head = sizeof(shclw_upgraded) + n * sizeof(shclw_diag);
+	size_t strings = 0;
+	for (size_t i = 0; i < n; i++) {
+		strings += ds[i].code.n + ds[i].message.n + 2;
+	}
+	shclw_upgraded *u = strings < SIZE_MAX / 4 ? (shclw_upgraded *)malloc(head + strings + len + blen + 2) : NULL;
+	if (!u) {
+		free(ds);
+		return NULL;
+	}
+	shclw_diag *to = (shclw_diag *)(u + 1);
+	char *at = (char *)(to + n);
+	for (size_t i = 0; i < n; i++) {
+		to[i] = ds[i];
+		memcpy(at, ds[i].code.p, ds[i].code.n + 1);
+		to[i].code.p = at;
+		at += ds[i].code.n + 1;
+		memcpy(at, ds[i].message.p, ds[i].message.n + 1);
+		to[i].message.p = at;
+		at += ds[i].message.n + 1;
+	}
+	free(ds);
+	if (len) {
+		memcpy(at, text, len);
+	}
+	at[len] = '\0';
+	u->text.p = at;
+	u->text.n = len;
+	at += len + 1;
+	if (blen) {
+		memcpy(at, backup, blen);
+	}
+	at[blen] = '\0';
+	u->backup.p = at;
+	u->backup.n = blen;
+	u->from = from;
+	u->changed = changed;
+	u->unsure = unsure;
+	u->diags = n ? to : NULL;
+	u->n_diags = n;
+	return u;
+}
+
+bool shclw_i_irregular(const char *path) {
+#ifdef _WIN32
+	struct _stat64 st;
+	return _stat64(path, &st) == 0 && (st.st_mode & _S_IFMT) != _S_IFREG;
+#else
+	struct stat st;
+	return stat(path, &st) == 0 && !S_ISREG(st.st_mode);
+#endif
 }

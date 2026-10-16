@@ -74,6 +74,50 @@ shclw_string *shclw_i_dedupe_names(const shclw_string *names, size_t n, size_t *
 // Copies of the nodes in one block, each string with a NUL after it.
 shclw_node *shclw_i_copy_nodes(const shclw_node *nodes, size_t n, size_t *count);
 
+// Copies of the diagnostics in one block, each string with a NUL after it.
+shclw_diag *shclw_i_copy_diags(const shclw_diag *diags, size_t n, size_t *count);
+
+// An upgrade's result in one block, with copies of text, backup, and diags.
+// backup may be NULL for none. NULL only when memory ran out.
+shclw_upgraded *shclw_i_upgraded(const char *text, size_t len, int64_t from, bool changed, size_t unsure,
+                                 const char *backup, const shclw_diag *diags, size_t n_diags);
+
+// Something at path that isn't a regular file, such as a FIFO or a device.
+bool shclw_i_irregular(const char *path);
+
+// What a save does with the info block, Go's shclw.Info.
+typedef enum { SHCLW_I_INFO_AS_IS, SHCLW_I_INFO_ON, SHCLW_I_INFO_OFF } shclw_i_info;
+
+// What an adapter hands shclw_i_finish_info. values sums up the values and
+// errors text loads to with the bound shcl, malloc'd, or NULL when memory ran
+// out. A run of lines whose removal leaves that the same is comments, which is
+// how a block's text inside a raw body is told from a real block.
+typedef struct {
+	const char *block;
+	int64_t major;
+	char *(*values)(const char *text, size_t len, size_t *n);
+} shclw_i_info_edit;
+
+// Go's FinishInfo: text as a save writes it after InfoBlock and StampFormat,
+// in *out, which the caller frees. path, which may be NULL, goes in the error.
+shclw_kind shclw_i_finish_info(const char *text, size_t len, shclw_i_info info, bool stamp, const shclw_i_info_edit *e,
+                               const char *path, char **out, size_t *out_len, shclw_error *err);
+
+// Go's ReplaceRead: writes data over path, where was is the text last read
+// from it. A file that has changed since is left alone, checked before the
+// backup and again before the write. backup, when not NULL, keeps was first
+// and gives the copy's name, malloc'd, which goes in *backup_name. When the
+// write fails, the original stays or is put back from the backup, and then
+// the backup goes. Only when neither works is the backup kept, and the error
+// names it.
+typedef struct {
+	shclw_kind (*backup)(void *ctx, char **name, shclw_error *err);
+	shclw_kind (*write)(void *ctx, const char *path, const char *data, size_t len, shclw_error *err);
+	void *ctx;
+} shclw_i_replacer;
+shclw_kind shclw_i_replace_read(const char *path, const char *was, size_t was_len, const char *data, size_t len,
+                                const shclw_i_replacer *how, char **backup_name, shclw_error *err);
+
 // The shortest digits that read back as f, and the closest of those: Go's
 // strconv.FormatFloat(f, 'e', -1, 64), or with single, as a float32. digits
 // gets them with no point, at least 40 bytes, and *exp the power of 10 of the

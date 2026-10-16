@@ -6,6 +6,7 @@
 #include "shclw_adapter.h"
 
 #include <errno.h>
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -235,6 +236,454 @@ void shclw_i_finite_all(shclw_got_floats *g) {
 			g->status = SHCLW_BAD_TYPE;
 		}
 	}
+}
+
+// The last digit up by one, carried, with the exponent moved when it carries
+// out of the first.
+static void digit_up(char *digits, size_t *n, int *exp) {
+	size_t i = *n;
+	while (i > 0 && digits[i - 1] == '9') {
+		digits[--i] = '0';
+	}
+	if (i > 0) {
+		digits[i - 1]++;
+		return;
+	}
+	memmove(digits + 1, digits, *n);
+	digits[0] = '1';
+	digits[++*n] = '\0';
+	++*exp;
+}
+
+// Whether digits are exact cut short where the rest is a 5 and only 0s, so
+// the cut rounded a tie down.
+static bool cut_at_tie(const char *exact, const char *digits, size_t n) {
+	if (strlen(exact) <= n || exact[n] != '5' || strncmp(exact, digits, n) != 0) {
+		return false;
+	}
+	return exact[n + 1 + strspn(exact + n + 1, "0")] == '\0';
+}
+
+// glibc's %.*e is the closest at a given length, which next to a power of 2
+// can miss the interval that reads back while the digit above it is inside.
+// So that one is tried too. An exact tie glibc rounds to even, and Go's
+// Dragonbox does too, except at a power of 2, where it rounds up.
+void shclw_i_shortest(double f, bool single, char *digits, int *exp) {
+	char s[80];
+	// 2^-1074 has 751 digits.
+	char exact[800] = "";
+	int e2 = 0;
+	// Go leaves one power of 2 at even, the one it holds as its mantissa
+	// times 2^-77: 2^-25, or as a float32, 2^-54.
+	bool tie_up = f != 0 && frexp(fabs(f), &e2) == 0.5 && fabs(f) >= (single ? FLT_MIN : DBL_MIN) &&
+	              e2 - 1 - (single ? 23 : 52) != -77;
+	if (tie_up) {
+		char all[820];
+		(void)snprintf(all, sizeof all, "%.780e", fabs(f));
+		size_t at = 0;
+		for (const char *p = all; *p && *p != 'e'; p++) {
+			if (*p >= '0' && *p <= '9') {
+				exact[at++] = *p;
+			}
+		}
+		while (at > 1 && exact[at - 1] == '0') {
+			at--;
+		}
+		exact[at] = '\0';
+	}
+	for (int prec = 0; prec < (single ? 9 : 17); prec++) {
+		(void)snprintf(s, sizeof s, "%.*e", prec, f);
+		char *e = strchr(s, 'e');
+		*exp = (int)strtol(e + 1, NULL, 10);
+		size_t n = 0;
+		for (char *p = s; p < e; p++) {
+			if (*p >= '0' && *p <= '9') {
+				digits[n++] = *p;
+			}
+		}
+		digits[n] = '\0';
+		if (exact[0] && cut_at_tie(exact, digits, n)) {
+			digit_up(digits, &n, exp);
+		}
+		for (int pass = 0; pass < 2; pass++) {
+			(void)snprintf(s, sizeof s, "%s%c.%se%d", signbit(f) ? "-" : "", digits[0], digits + 1, *exp);
+			if (single ? strtof(s, NULL) == (float)f : strtod(s, NULL) == f) {
+				return;
+			}
+			digit_up(digits, &n, exp);
+		}
+	}
+}
+
+static unsigned char ascii_lower(unsigned char c) { return c >= 'A' && c <= 'Z' ? (unsigned char)(c + 32) : c; }
+
+// By name without ASCII case, then by place in the list.
+static int by_name(const void *a, const void *b) {
+	const shclw_string *x = *(const shclw_string *const *)a;
+	const shclw_string *y = *(const shclw_string *const *)b;
+	for (size_t i = 0; i < x->n && i < y->n; i++) {
+		unsigned char cx = ascii_lower((unsigned char)x->p[i]);
+		unsigned char cy = ascii_lower((unsigned char)y->p[i]);
+		if (cx != cy) {
+			return cx < cy ? -1 : 1;
+		}
+	}
+	if (x->n != y->n) {
+		return x->n < y->n ? -1 : 1;
+	}
+	return x < y ? -1 : x > y;
+}
+
+shclw_string *shclw_i_dedupe_names(const shclw_string *names, size_t n, size_t *count) {
+	*count = 0;
+	if (n == 0 || n > SIZE_MAX / sizeof(shclw_string)) {
+		return n ? NULL : shclw_i_copy_strs(names, 0, count);
+	}
+	const shclw_string **order = (const shclw_string **)malloc(n * sizeof(shclw_string *));
+	bool *dup = (bool *)calloc(n, sizeof(bool));
+	shclw_string *keep = (shclw_string *)malloc(n * sizeof(shclw_string));
+	shclw_string *out = NULL;
+	if (order && dup && keep) {
+		for (size_t i = 0; i < n; i++) {
+			order[i] = &names[i];
+		}
+		if (n > 1) {
+			qsort((void *)order, n, sizeof order[0], by_name);
+		}
+		for (size_t i = 1; i < n; i++) {
+			const shclw_string *x = order[i - 1];
+			const shclw_string *y = order[i];
+			bool same = x->n == y->n;
+			for (size_t k = 0; same && k < x->n; k++) {
+				same = ascii_lower((unsigned char)x->p[k]) == ascii_lower((unsigned char)y->p[k]);
+			}
+			// Sorted by place within a name, so the first is the one kept.
+			if (same) {
+				dup[y - names] = true;
+			}
+		}
+		size_t kept = 0;
+		for (size_t i = 0; i < n; i++) {
+			if (!dup[i]) {
+				keep[kept++] = names[i];
+			}
+		}
+		out = shclw_i_copy_strs(keep, kept, count);
+	}
+	free((void *)order);
+	free(dup);
+	free(keep);
+	return out;
+}
+
+shclw_node *shclw_i_copy_nodes(const shclw_node *nodes, size_t n, size_t *count) {
+	*count = 0;
+	if (n > (SIZE_MAX / 2) / sizeof(shclw_node)) {
+		return NULL;
+	}
+	size_t bytes = n * sizeof(shclw_node);
+	for (size_t i = 0; i < n; i++) {
+		size_t more = nodes[i].path.n + nodes[i].value.n + 2;
+		if (nodes[i].path.n >= SIZE_MAX / 8 || nodes[i].value.n >= SIZE_MAX / 8 || more >= SIZE_MAX / 2 - bytes) {
+			return NULL;
+		}
+		bytes += more;
+	}
+	shclw_node *out = (shclw_node *)shclw_i_alloc(bytes);
+	if (!out) {
+		return NULL;
+	}
+	char *text = (char *)(out + n);
+	for (size_t i = 0; i < n; i++) {
+		const shclw_string *from[2] = {&nodes[i].path, &nodes[i].value};
+		shclw_string *to[2] = {&out[i].path, &out[i].value};
+		for (size_t k = 0; k < 2; k++) {
+			if (from[k]->n) {
+				memcpy(text, from[k]->p, from[k]->n);
+			}
+			// As in shclw_i_copy_strs, the analyzer loses the sum above.
+			text[from[k]->n] = '\0'; // NOLINT(clang-analyzer-security.ArrayBound)
+			to[k]->p = text;
+			to[k]->n = from[k]->n;
+			text += from[k]->n + 1;
+		}
+		out[i].line = nodes[i].line;
+	}
+	*count = n;
+	return out;
+}
+
+// Go's InFileOrder sorts by this: the line, with a put's 0 after the rest,
+// and Each order between equal lines.
+static size_t line_key(const shclw_node *node) { return node->line ? node->line : SIZE_MAX; }
+
+static char *pick(shclw_doc *d, const char *path, bool last, size_t *len) {
+	size_t n = 0;
+	shclw_node *nodes = shclw_each(d, path, &n);
+	if (!nodes) {
+		return NULL;
+	}
+	if (n == 0) {
+		free(nodes);
+		return shclw_i_dup(path, strlen(path), len);
+	}
+	size_t at = 0;
+	for (size_t i = 1; i < n; i++) {
+		size_t key = line_key(&nodes[i]);
+		size_t best = line_key(&nodes[at]);
+		if (last ? key >= best : key < best) {
+			at = i;
+		}
+	}
+	char *out = shclw_i_dup(nodes[at].path.p, nodes[at].path.n, len);
+	free(nodes);
+	return out;
+}
+
+char *shclw_first(shclw_doc *d, const char *path, size_t *len) { return pick(d, path, false, len); }
+char *shclw_last(shclw_doc *d, const char *path, size_t *len) { return pick(d, path, true, len); }
+
+static int by_line(const void *a, const void *b) {
+	const shclw_node *x = *(const shclw_node *const *)a;
+	const shclw_node *y = *(const shclw_node *const *)b;
+	size_t kx = line_key(x);
+	size_t ky = line_key(y);
+	if (kx != ky) {
+		return kx < ky ? -1 : 1;
+	}
+	// qsort isn't stable, so Each order breaks the tie.
+	return x < y ? -1 : x > y;
+}
+
+size_t *shclw_lines(shclw_doc *d, const char *path, size_t *n) {
+	*n = 0;
+	size_t count = 0;
+	shclw_node *nodes = shclw_each(d, path, &count);
+	if (!nodes || count == 0) {
+		free(nodes);
+		return nodes ? (size_t *)shclw_i_alloc(0) : NULL;
+	}
+	const shclw_node **order = (const shclw_node **)malloc(count * sizeof(shclw_node *));
+	size_t *out = (size_t *)malloc(count * sizeof(size_t));
+	if (!order || !out) {
+		free((void *)order);
+		free(out);
+		free(nodes);
+		return NULL;
+	}
+	for (size_t i = 0; i < count; i++) {
+		order[i] = &nodes[i];
+	}
+	if (count > 1) {
+		qsort((void *)order, count, sizeof order[0], by_line);
+	}
+	for (size_t i = 0; i < count; i++) {
+		out[i] = order[i]->line;
+	}
+	free((void *)order);
+	free(nodes);
+	*n = count;
+	return out;
+}
+
+static shclw_kind not_finite(shclw_error *err, const char *path) {
+	return shclw_i_fail(err, SHCLW_ERR_BAD_VALUE, path, "not a finite number", 0);
+}
+
+static bool same_strs(const shclw_string *a, const shclw_string *b, size_t n) {
+	for (size_t i = 0; i < n; i++) {
+		if (a[i].n != b[i].n || (a[i].n && memcmp(a[i].p, b[i].p, a[i].n) != 0)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static bool same_floats(const double *a, const double *b, size_t n) {
+	for (size_t i = 0; i < n; i++) {
+		if (a[i] != b[i]) {
+			return false;
+		}
+	}
+	return true;
+}
+
+// Go's VerifyPut: shcl can take a value and read back something else. See
+// "What the wrapper evens out" in design.md.
+shclw_kind shclw_i_verify_put(shclw_doc *d, const char *path, const shclw_i_value *v, shclw_error *err) {
+	shclw_status st = SHCLW_GOOD;
+	bool same = false;
+	bool empty_ok = false;
+	bool oom = false;
+	switch (v->kind) {
+	case SHCLW_I_INT: {
+		shclw_got_int g = shclw_get_int(d, path);
+		st = g.status;
+		same = g.value == v->i;
+		break;
+	}
+	case SHCLW_I_FLOAT: {
+		shclw_got_float g = shclw_get_float(d, path);
+		st = g.status;
+		same = g.value == v->f;
+		break;
+	}
+	case SHCLW_I_BOOL: {
+		shclw_got_bool g = shclw_get_bool(d, path);
+		st = g.status;
+		same = g.value == v->b;
+		break;
+	}
+	case SHCLW_I_STR: {
+		shclw_got_str g = shclw_get_str(d, path);
+		st = g.status;
+		oom = !g.value;
+		same = g.value && g.len == v->n && (!v->n || !memcmp(g.value, v->str, v->n));
+		free(g.value);
+		break;
+	}
+	case SHCLW_I_STRS: {
+		shclw_got_strs g = shclw_get_strs(d, path);
+		st = g.status;
+		oom = !g.value;
+		same = g.value && g.n == v->n && same_strs(g.value, v->strs, v->n);
+		empty_ok = true;
+		free(g.value);
+		break;
+	}
+	case SHCLW_I_INTS: {
+		shclw_got_ints g = shclw_get_ints(d, path);
+		st = g.status;
+		oom = !g.value;
+		same = g.value && g.n == v->n && (!v->n || !memcmp(g.value, v->ints, v->n * sizeof(int64_t)));
+		empty_ok = true;
+		free(g.value);
+		break;
+	}
+	case SHCLW_I_FLOATS: {
+		shclw_got_floats g = shclw_get_floats(d, path);
+		st = g.status;
+		oom = !g.value;
+		same = g.value && g.n == v->n && same_floats(g.value, v->floats, v->n);
+		empty_ok = true;
+		free(g.value);
+		break;
+	}
+	}
+	if (oom) {
+		return shclw_i_fail(err, SHCLW_ERR_NO_MEMORY, path, NULL, 0);
+	}
+	// 1.2 and 2.0 read an empty array back as Empty, and can't write one any
+	// other way.
+	if ((st == SHCLW_GOOD && same) || (empty_ok && st == SHCLW_EMPTY && v->n == 0)) {
+		return shclw_i_ok(err);
+	}
+	char why[64];
+	(void)snprintf(why, sizeof why, "reads back as %s", st == SHCLW_GOOD ? "a different value" : shclw_status_name(st));
+	return shclw_i_fail(err, SHCLW_ERR_NO_READ_BACK, path, why, 0);
+}
+
+shclw_i_value shclw_i_value_of(shclw_i_kind kind, size_t n) {
+	shclw_i_value v = {kind, 0, 0, false, NULL, NULL, NULL, NULL, n};
+	return v;
+}
+
+static shclw_kind put(shclw_doc *d, const char *path, const shclw_i_value *v, shclw_error *err) {
+	shclw_kind k = shclw_i_set(d, path, v, err);
+	return k == SHCLW_OK ? shclw_i_verify_put(d, path, v, err) : k;
+}
+
+shclw_kind shclw_put_int(shclw_doc *d, const char *path, int64_t v, shclw_error *err) {
+	shclw_i_value val = shclw_i_value_of(SHCLW_I_INT, 0);
+	val.i = v;
+	return put(d, path, &val, err);
+}
+
+shclw_kind shclw_put_float(shclw_doc *d, const char *path, double v, shclw_error *err) {
+	if (!isfinite(v)) {
+		return not_finite(err, path);
+	}
+	shclw_i_value val = shclw_i_value_of(SHCLW_I_FLOAT, 0);
+	val.f = v;
+	return put(d, path, &val, err);
+}
+
+// (double)v would write the float's binary noise: 0.9 as 0.8999999761581421.
+shclw_kind shclw_put_float32(shclw_doc *d, const char *path, float v, shclw_error *err) {
+	if (!isfinite(v)) {
+		return not_finite(err, path);
+	}
+	char digits[40];
+	int exp = 0;
+	shclw_i_shortest((double)v, true, digits, &exp);
+	char text[64];
+	(void)snprintf(text, sizeof text, "%s%c.%se%d", signbit(v) ? "-" : "", digits[0], digits + 1, exp);
+	return shclw_put_float(d, path, strtod(text, NULL), err);
+}
+
+shclw_kind shclw_put_bool(shclw_doc *d, const char *path, bool v, shclw_error *err) {
+	shclw_i_value val = shclw_i_value_of(SHCLW_I_BOOL, 0);
+	val.b = v;
+	return put(d, path, &val, err);
+}
+
+shclw_kind shclw_put_str(shclw_doc *d, const char *path, const char *v, size_t len, shclw_error *err) {
+	shclw_i_value val = shclw_i_value_of(SHCLW_I_STR, v ? len : 0);
+	val.str = v ? v : "";
+	return put(d, path, &val, err);
+}
+
+shclw_kind shclw_put_strs(shclw_doc *d, const char *path, const shclw_string *v, size_t n, shclw_error *err) {
+	shclw_i_value val = shclw_i_value_of(SHCLW_I_STRS, v ? n : 0);
+	val.strs = v;
+	return put(d, path, &val, err);
+}
+
+shclw_kind shclw_put_ints(shclw_doc *d, const char *path, const int64_t *v, size_t n, shclw_error *err) {
+	shclw_i_value val = shclw_i_value_of(SHCLW_I_INTS, v ? n : 0);
+	val.ints = v;
+	return put(d, path, &val, err);
+}
+
+shclw_kind shclw_put_floats(shclw_doc *d, const char *path, const double *v, size_t n, shclw_error *err) {
+	for (size_t i = 0; v && i < n; i++) {
+		if (!isfinite(v[i])) {
+			return not_finite(err, path);
+		}
+	}
+	shclw_i_value val = shclw_i_value_of(SHCLW_I_FLOATS, v ? n : 0);
+	val.floats = v;
+	return put(d, path, &val, err);
+}
+
+shclw_kind shclw_i_verify_syntax(shclw_doc *d, const char *path, shclw_doc *alone, shclw_doc *line, shclw_error *err) {
+	size_t a_len = 0;
+	size_t l_len = 0;
+	char *a = shclw_canonical(alone, &a_len);
+	char *l = shclw_canonical(line, &l_len);
+	bool oom = !a || !l;
+	bool typed = !oom && a_len == l_len && !memcmp(a, l, a_len);
+	free(a);
+	free(l);
+	if (oom) {
+		return shclw_i_fail(err, SHCLW_ERR_NO_MEMORY, path, NULL, 0);
+	}
+	if (!typed) {
+		return shclw_i_fail(err, SHCLW_ERR_NO_READ_BACK, path, "the text doesn't read back as typed", 0);
+	}
+	shclw_got_str got = shclw_get_str(d, path);
+	shclw_got_str want = shclw_get_str(line, "k");
+	oom = !got.value || !want.value;
+	bool same = !oom && got.status == want.status && got.len == want.len && !memcmp(got.value, want.value, got.len);
+	free(got.value);
+	free(want.value);
+	if (oom) {
+		return shclw_i_fail(err, SHCLW_ERR_NO_MEMORY, path, NULL, 0);
+	}
+	if (!same) {
+		return shclw_i_fail(err, SHCLW_ERR_NO_READ_BACK, path, "reads back as a different value", 0);
+	}
+	return shclw_i_ok(err);
 }
 
 shclw_kind shclw_read_text(const char *path, char **text, size_t *len, shclw_error *err) {

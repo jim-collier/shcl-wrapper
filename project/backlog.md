@@ -278,6 +278,36 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Commit: 22da342
 	- Test case: `test_reads_give_back` in `source/c/tests/api_test.c`. 200,000 reads keep under 64 KB. With the give-back taken out they kept 44 MB and the test failed.
 
+- C: walking and writes on shcl 3.0
+	- ID: 2026101516110996
+	- Type: Feature
+	- Status: Waiting on signoff
+	- Priority: High
+	- Opened: 20261015-161111
+	- Opened by: JC
+	- Parent ID: 2026101512024159
+	- Prereq IDs: 2026101516110959
+	- Related IDs: 2026101513330046, 2026101517145199, 2026101517145204
+	- Requirements:
+		- Has, Count, Names, Each, Child, Line, Lines, First, and Last.
+		- Put, PutSyntax, Comment, and Remove, with the same read-back check as Go and Rust.
+	- Progress log:
+		- 20261015: `shclw.h` has the walking calls, a put for each type, PutSyntax, Comment, and Remove. Every put goes through one read-back check in `shclw.c`. A path with several instances is `BadPath`, which 3.0 refuses by itself. 16 shared cases run whole in C, and the ops C still skips are check, format, upgrade, info, stamp, and rewrites, all for 2026101516111033.
+		- The question 2026101513330046 left here is settled: `shclw_write` compacts the document after a good save. Without that, 200 puts of a 16 KB string with a save after each kept 4.3 MB.
+		- glibc's `printf` rounds an exact tie to even, and Go rounds it up at a power of 2. So the float32 2^-12 came out as 0.00024414062 where Go writes 0.00024414063. The digits helper now follows Go, and the floats `run.c` prints use the same helper.
+		- 2 Go and Rust differences found on the way, logged as 2026101517145199 and 2026101517145204. C follows Go in both.
+	- Decisions:
+		- C has no `any`, so there's a put per type. A `float` has its own, `shclw_put_float32`.
+		- `shclw_write` compacts after a good save, rather than after every edit or never. A program that edits in a loop and never saves can compact through `shclw_inner`.
+		- `Names` folds ASCII case only, as shcl matches names and as Rust does.
+		- `shclw_child` takes the name with its length, as values going in do, and gives back a path.
+	- Verified: the gate passes. C's float digits match Go's on 400,000 doubles and 600,000 float32 values, with every power of 2 and its neighbors among them. Each new test failed with its rule taken out: the compaction, float32 digits, both tie rules, the read-back, the several-instances refusal, the order of instances a put made, and the name dedupe.
+	- Branch: c-walk
+	- Commit: 78d6b88
+	- Test case: `test_walk`, `test_first_last`, `test_puts`, `test_verify_put`, `test_put_float32`, `test_shortest`, `test_several`, and `test_saves_give_back` in `source/c/tests/api_test.c`. New case `030-edit-after-save`, and the shared cases through `cicd/c_cases.py`.
+	- Swept: every new read in `shclw3.c` gives shcl's read memory back. The setter status map has every `shcl_set_status`, as Go's has. `run.c`'s float prints and `shclw_put_float32` share the one digits helper.
+	- Acceptance signoff: Waiting. The put calls and where the compaction happens were choices.
+
 - PutSyntax doesn't read its value back
 	- ID: 2026101513330007
 	- Type: Bug
@@ -477,19 +507,6 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- shcl's C header has no version macro before 3.0, so 1.2 and 2.0 are told apart by what they declare.
 	- Progress log:
 		- 20261015: split into 5 parts, each its own item below. This closes when they do.
-
-- C: walking and writes on shcl 3.0
-	- ID: 2026101516110996
-	- Type: Feature
-	- Status: Queued
-	- Priority: High
-	- Opened: 20261015-161111
-	- Opened by: JC
-	- Parent ID: 2026101512024159
-	- Prereq IDs: 2026101516110959
-	- Requirements:
-		- Has, Count, Names, Each, Child, Line, Lines, First, and Last.
-		- Put, PutSyntax, Comment, and Remove, with the same read-back check as Go and Rust.
 
 - C: format, upgrade, and the info block on shcl 3.0
 	- ID: 2026101516111033
@@ -842,6 +859,37 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Incorrect behavior: It reports `from 2 changed false`.
 	- Expected behavior: design.md says a file with no Format line is taken as current, so `from` should say 3.
 	- Note: shcl documents a fallback to 2 when no line names a format. Seen while fixing 2026101515553202, not yet reproduced on its own.
+
+- Go's Names drops a name that differs from another only past ASCII case
+	- ID: 2026101517145199
+	- Type: Bug
+	- Status: Queued
+	- Severity: Low
+	- Opened: 20261015-171452
+	- Opened by: JC
+	- Related IDs: 2026101516110996
+	- Steps to reproduce:
+		- `names` with an empty path on a document with `"É": 1` and `"é": 2`.
+	- Incorrect behavior: Go lists `É` alone. Rust lists both, and shcl counts them as 2 keys.
+	- Expected behavior: Both, as Rust and C give them.
+	- Reproduced: 20261015, with the Go and Rust drivers on 1.2 and 3.0.
+	- Possible cause: `DedupeNames` folds with `strings.ToLower`, though its comment says ASCII case. Rust's `dedupe_names` uses `to_ascii_lowercase`.
+
+- Go and Rust print a float that's an exact tie at its shortest digits differently
+	- ID: 2026101517145204
+	- Type: Bug
+	- Status: Queued
+	- Severity: Low
+	- Opened: 20261015-171452
+	- Opened by: JC
+	- Related IDs: 2026101516110996
+	- Steps to reproduce:
+		- `or float missing 2.98023223876953125e-08` in an ops script, or `1125899906842624.25`.
+	- Incorrect behavior: Go prints `2.9802322387695312e-8` and `1125899906842624.2`. Rust prints `...313e-8` and `...624.3`. Each reads back as the same float, and so do the negatives.
+	- Expected behavior: The same text in every language, as design.md's ops section says.
+	- Reproduced: 20261015 on 3.0. Over every double power of 2 and the next float up, these 4 were the only differences.
+	- Possible cause: Go's Dragonbox rounds an exact tie to even, except up at most powers of 2. Rust's formatter rounds it up.
+	- Note: Seen in what the ops print. What a put writes comes from shcl, and wasn't checked.
 
 - Commit and publish from cicd
 	- ID: 2026101512024171

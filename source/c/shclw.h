@@ -14,7 +14,10 @@
 // Memory: the strings, arrays, text, and diagnostics a shclw call hands back
 // are malloc'd, each in one block, and the caller frees them with free().
 // Documents are freed with shclw_free. Reads copy their value out and give
-// shcl's read memory back before they return.
+// shcl's read memory back before they return. Edits keep what they replaced
+// until shclw_write, which compacts the document after a good save. A
+// program that edits in a loop and never saves can call
+// shcl_compact(shclw_inner(d)) itself.
 //
 // Strings: anything shclw hands back has its length and a NUL after it. Go by
 // the length, since a value can hold a NUL. Paths and file names are plain
@@ -149,6 +152,14 @@ typedef struct {
 	size_t line;
 } shclw_got_floats;
 
+// One instance from shclw_each. path reads it and no other; add names to it
+// with shclw_child. line is 0 for one a put made.
+typedef struct {
+	shclw_string path;
+	shclw_string value;
+	size_t line;
+} shclw_node;
+
 // "Good", "NotFound", and so on, as the other wrappers print them.
 const char *shclw_status_name(shclw_status s);
 // "notfound", "io", and so on.
@@ -175,7 +186,8 @@ char *shclw_text(shclw_doc *d, size_t *len);
 // The document in canonical form. Caller frees.
 char *shclw_canonical(shclw_doc *d, size_t *len);
 // Saves shclw_text atomically. SHCLW_ERR_REFUSED when the save would lose
-// lines the load couldn't use.
+// lines the load couldn't use. After a good save it gives back the memory
+// earlier edits left behind.
 shclw_kind shclw_write(shclw_doc *d, const char *path, shclw_error *err);
 
 // The load's diagnostics. Caller frees the block. NULL only when memory ran out.
@@ -205,6 +217,50 @@ shclw_got_str shclw_get_raw(shclw_doc *d, const char *path);
 shclw_got_strs shclw_get_strs(shclw_doc *d, const char *path);
 shclw_got_ints shclw_get_ints(shclw_doc *d, const char *path);
 shclw_got_floats shclw_get_floats(shclw_doc *d, const char *path);
+
+// Whether the path names anything, and how many instances.
+bool shclw_has(shclw_doc *d, const char *path);
+size_t shclw_count(shclw_doc *d, const char *path);
+// The line of the one node path names, or 0.
+size_t shclw_line(shclw_doc *d, const char *path);
+// Child names under path, once each, in file order. One block; caller frees.
+// NULL only when memory ran out.
+shclw_string *shclw_names(shclw_doc *d, const char *path, size_t *n);
+// Every instance path names, in the order shcl keeps them. A wildcard slot
+// that reaches no node or several is left out. One block; caller frees.
+shclw_node *shclw_each(shclw_doc *d, const char *path, size_t *n);
+// The line of each instance, in file order. One a put made is 0, after the
+// rest. Caller frees.
+size_t *shclw_lines(shclw_doc *d, const char *path, size_t *n);
+// path narrowed to its first or last instance by line, or a copy of path when
+// it names none. Caller frees.
+char *shclw_first(shclw_doc *d, const char *path, size_t *len);
+char *shclw_last(shclw_doc *d, const char *path, size_t *len);
+// base with one more name on the end, quoted if it needs it. base "" gives the
+// name alone. Caller frees.
+char *shclw_child(shclw_doc *d, const char *base, const char *name, size_t name_len, size_t *len);
+
+// Puts read their value back: one that reads back different is
+// SHCLW_ERR_NO_READ_BACK, with the edit left in place. A path with several
+// instances at any step is SHCLW_ERR_BAD_PATH adn changes nothing.
+shclw_kind shclw_put_int(shclw_doc *d, const char *path, int64_t v, shclw_error *err);
+// Infinity and NaN are SHCLW_ERR_BAD_VALUE and change nothing.
+shclw_kind shclw_put_float(shclw_doc *d, const char *path, double v, shclw_error *err);
+// Written as the float's own shortest digits, so 0.9f is 0.9 and not the
+// double it widens to.
+shclw_kind shclw_put_float32(shclw_doc *d, const char *path, float v, shclw_error *err);
+shclw_kind shclw_put_bool(shclw_doc *d, const char *path, bool v, shclw_error *err);
+shclw_kind shclw_put_str(shclw_doc *d, const char *path, const char *v, size_t len, shclw_error *err);
+shclw_kind shclw_put_strs(shclw_doc *d, const char *path, const shclw_string *v, size_t n, shclw_error *err);
+shclw_kind shclw_put_ints(shclw_doc *d, const char *path, const int64_t *v, size_t n, shclw_error *err);
+shclw_kind shclw_put_floats(shclw_doc *d, const char *path, const double *v, size_t n, shclw_error *err);
+// text read as shcl value syntax. The whole text has to read back, so one
+// with a trailing comment is SHCLW_ERR_NO_READ_BACK.
+shclw_kind shclw_put_syntax(shclw_doc *d, const char *path, const char *text, size_t len, shclw_error *err);
+// Sets the comment above path.
+shclw_kind shclw_comment(shclw_doc *d, const char *path, const char *text, size_t len, shclw_error *err);
+// Takes out every instance of path and what's under it, and says how many.
+size_t shclw_remove(shclw_doc *d, const char *path);
 
 // The shcl document underneath. A shclw read gives shcl's read memory back,
 // so a result from shcl's own read calls on it is good only until the next

@@ -93,43 +93,6 @@ static void esc(buf *b, const char *s, size_t n) {
 	}
 }
 
-// Go's strconv.FormatFloat(f, 'e', -1, 64) gives the shortest digits that
-// read back, and the closest of those. snprintf gives the closest at a given
-// length, which can miss by one in the last digit next to a power of 2, so
-// the digit above it is tried too.
-static bool shortest(double f, int prec, char *digits, int *exp) {
-	char s[80];
-	(void)snprintf(s, sizeof s, "%.*e", prec, f);
-	char *e = strchr(s, 'e');
-	*exp = (int)strtol(e + 1, NULL, 10);
-	size_t n = 0;
-	for (char *p = s; p < e; p++) {
-		if (*p >= '0' && *p <= '9') {
-			digits[n++] = *p;
-		}
-	}
-	digits[n] = '\0';
-	for (int pass = 0; pass < 2; pass++) {
-		(void)snprintf(s, sizeof s, "%s%c.%se%d", f < 0 ? "-" : "", digits[0], digits + 1, *exp);
-		if (strtod(s, NULL) == f) {
-			return true;
-		}
-		size_t i = n;
-		while (i > 0 && digits[i - 1] == '9') {
-			digits[--i] = '0';
-		}
-		if (i == 0) {
-			memmove(digits + 1, digits, n);
-			digits[0] = '1';
-			digits[n + 1] = '\0';
-			++*exp;
-		} else {
-			digits[i - 1]++;
-		}
-	}
-	return false;
-}
-
 // The same in every wrapper language: shortest digits, positional from 1e-5
 // to 1e17, else with an exponent.
 static void put_float(buf *b, double f) {
@@ -143,11 +106,7 @@ static void put_float(buf *b, double f) {
 	}
 	char digits[40];
 	int exp = 0;
-	for (int prec = 0; prec < 17; prec++) {
-		if (shortest(f, prec, digits, &exp)) {
-			break;
-		}
-	}
+	shclw_i_shortest(f, false, digits, &exp);
 	size_t n = strlen(digits);
 	while (n > 1 && digits[n - 1] == '0') {
 		digits[--n] = '\0';
@@ -634,6 +593,165 @@ static void write_(runner *r, const fields *f) {
 	free(saved);
 }
 
+static void counted_sizes(buf *b, const size_t *v, size_t n) {
+	put_size(b, n);
+	for (size_t i = 0; i < n; i++) {
+		putc_(b, '\t');
+		put_size(b, v[i]);
+	}
+}
+
+static void lines(runner *r, const char *path) {
+	size_t n = 0;
+	size_t *v = shclw_lines(r->doc, path, &n);
+	if (!v) {
+		nomem(&r->out);
+		return;
+	}
+	counted_sizes(&r->out, v, n);
+	nl(&r->out);
+	free(v);
+}
+
+static void pick_get(runner *r, const fields *f, bool last) {
+	char *path = last ? shclw_last(r->doc, arg(f, 2), NULL) : shclw_first(r->doc, arg(f, 2), NULL);
+	if (!path) {
+		nomem(&r->out);
+		return;
+	}
+	get(r, arg(f, 1), path);
+	free(path);
+}
+
+static void names(runner *r, const char *path) {
+	size_t n = 0;
+	shclw_string *v = shclw_names(r->doc, path, &n);
+	if (!v) {
+		nomem(&r->out);
+		return;
+	}
+	for (size_t i = 0; i < n; i++) {
+		if (i) {
+			putc_(&r->out, '\t');
+		}
+		esc(&r->out, v[i].p, v[i].n);
+	}
+	nl(&r->out);
+	free(v);
+}
+
+static void each(runner *r, const fields *f, bool with_get) {
+	size_t n = 0;
+	shclw_node *nodes = shclw_each(r->doc, arg(f, with_get ? 2 : 1), &n);
+	if (!nodes) {
+		nomem(&r->out);
+		return;
+	}
+	for (size_t i = 0; i < n && !r->out.oom; i++) {
+		put_size(&r->out, i);
+		putc_(&r->out, '\t');
+		if (!with_get) {
+			put_size(&r->out, nodes[i].line);
+			putc_(&r->out, '\t');
+			esc(&r->out, nodes[i].value.p, nodes[i].value.n);
+			nl(&r->out);
+			continue;
+		}
+		char *child = shclw_child(r->doc, nodes[i].path.p, arg(f, 3), arg_len(f, 3), NULL);
+		if (!child) {
+			nomem(&r->out);
+			break;
+		}
+		get(r, arg(f, 1), child);
+		free(child);
+	}
+	free(nodes);
+}
+
+// Go's parseValue, then the put. A value that doesn't parse is badvalue.
+static void put_(runner *r, const fields *f) {
+	const char *type = arg(f, 1);
+	const char *path = arg(f, 2);
+	const char *first = arg(f, 3);
+	size_t nv = f->n > 3 ? f->n - 3 : 0;
+	shclw_kind k = SHCLW_ERR_BAD_VALUE;
+	if (!strcmp(type, "int")) {
+		int64_t v = 0;
+		if (parse_int(first, &v)) {
+			k = shclw_put_int(r->doc, path, v, NULL);
+		}
+	} else if (!strcmp(type, "float")) {
+		double v = 0;
+		if (parse_float(first, &v)) {
+			k = shclw_put_float(r->doc, path, v, NULL);
+		}
+	} else if (!strcmp(type, "bool")) {
+		if (!strcmp(first, "true") || !strcmp(first, "false")) {
+			k = shclw_put_bool(r->doc, path, !strcmp(first, "true"), NULL);
+		}
+	} else if (!strcmp(type, "str")) {
+		k = shclw_put_str(r->doc, path, first, arg_len(f, 3), NULL);
+	} else if (!strcmp(type, "strs")) {
+		shclw_string *v = (shclw_string *)shclw_i_alloc(nv * sizeof(shclw_string));
+		if (!v) {
+			nomem(&r->out);
+			return;
+		}
+		for (size_t i = 0; i < nv; i++) {
+			v[i].p = f->v[i + 3];
+			v[i].n = f->len[i + 3];
+		}
+		k = shclw_put_strs(r->doc, path, v, nv, NULL);
+		free(v);
+	} else if (!strcmp(type, "ints") || !strcmp(type, "floats")) {
+		bool ints = !strcmp(type, "ints");
+		int64_t *iv = (int64_t *)shclw_i_alloc(nv * sizeof(int64_t));
+		double *fv = (double *)shclw_i_alloc(nv * sizeof(double));
+		if (!iv || !fv) {
+			free(iv);
+			free(fv);
+			nomem(&r->out);
+			return;
+		}
+		bool ok = true;
+		for (size_t i = 0; ok && i < nv; i++) {
+			ok = ints ? parse_int(f->v[i + 3], &iv[i]) : parse_float(f->v[i + 3], &fv[i]);
+		}
+		if (ok) {
+			k = ints ? shclw_put_ints(r->doc, path, iv, nv, NULL) : shclw_put_floats(r->doc, path, fv, nv, NULL);
+		}
+		free(iv);
+		free(fv);
+	}
+	result(r, k);
+}
+
+static void op_has(runner *r, const fields *f) { line_out(r, shclw_has(r->doc, arg(f, 1)) ? "true" : "false"); }
+static void op_count(runner *r, const fields *f) {
+	put_size(&r->out, shclw_count(r->doc, arg(f, 1)));
+	nl(&r->out);
+}
+static void op_line(runner *r, const fields *f) {
+	put_size(&r->out, shclw_line(r->doc, arg(f, 1)));
+	nl(&r->out);
+}
+static void op_lines(runner *r, const fields *f) { lines(r, arg(f, 1)); }
+static void op_first(runner *r, const fields *f) { pick_get(r, f, false); }
+static void op_last(runner *r, const fields *f) { pick_get(r, f, true); }
+static void op_names(runner *r, const fields *f) { names(r, arg(f, 1)); }
+static void op_each(runner *r, const fields *f) { each(r, f, false); }
+static void op_eachget(runner *r, const fields *f) { each(r, f, true); }
+static void op_put(runner *r, const fields *f) { put_(r, f); }
+static void op_syntax(runner *r, const fields *f) {
+	result(r, shclw_put_syntax(r->doc, arg(f, 1), arg(f, 2), arg_len(f, 2), NULL));
+}
+static void op_comment(runner *r, const fields *f) {
+	result(r, shclw_comment(r->doc, arg(f, 1), arg(f, 2), arg_len(f, 2), NULL));
+}
+static void op_remove(runner *r, const fields *f) {
+	put_size(&r->out, shclw_remove(r->doc, arg(f, 1)));
+	nl(&r->out);
+}
 static void op_parse(runner *r, const fields *f) { parse(r, f); }
 static void op_text(runner *r, const fields *f) {
 	(void)f;
@@ -672,19 +790,19 @@ static const struct {
 	{"errors",    op_errors,    false},
 	{"get",       op_get,       false},
 	{"or",        op_or,        false},
-	{"has",       NULL,         false},
-	{"count",     NULL,         false},
-	{"line",      NULL,         false},
-	{"lines",     NULL,         false},
-	{"first",     NULL,         false},
-	{"last",      NULL,         false},
-	{"names",     NULL,         false},
-	{"each",      NULL,         false},
-	{"eachget",   NULL,         false},
-	{"put",       NULL,         true},
-	{"syntax",    NULL,         true},
-	{"comment",   NULL,         true},
-	{"remove",    NULL,         true},
+	{"has",       op_has,       false},
+	{"count",     op_count,     false},
+	{"line",      op_line,      false},
+	{"lines",     op_lines,     false},
+	{"first",     op_first,     false},
+	{"last",      op_last,      false},
+	{"names",     op_names,     false},
+	{"each",      op_each,      false},
+	{"eachget",   op_eachget,   false},
+	{"put",       op_put,       true},
+	{"syntax",    op_syntax,    true},
+	{"comment",   op_comment,   true},
+	{"remove",    op_remove,    true},
 	{"info",      NULL,         true},
 	{"stamp",     NULL,         true},
 	{"check",     NULL,         false},

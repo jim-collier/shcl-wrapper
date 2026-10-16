@@ -6,7 +6,7 @@
 <!-- TOC ignore:true -->
 # Design
 
-Status: draft, 2026-10-15. Go and Rust are built over shcl 1.2, 2.0, and 3.0. C has loading, saving, and reads over 3.0, and the rest of it is in the backlog with Python and shcl 4.
+Status: draft, 2026-10-15. Go and Rust are built over shcl 1.2, 2.0, and 3.0. C has loading, saving, reads, walking, and writes over 3.0, and the rest of it is in the backlog with Python and shcl 4.
 
 <!-- TOC ignore:true -->
 ## Table of contents
@@ -185,9 +185,11 @@ Go names are listed. Rust uses the same words in snake case, and `ShclDoc` has t
 | `d.Comment(path, text)`   | Sets the comment above a path.
 | `d.Remove(path)`          | Takes out a path and everything under it, and says how many instances went. That's every instance, and also the ones under any step that repeats.
 
-- A Go `float32` or Rust `f32` is written as its own shortest digits, so 0.9 is written `0.9` and not as the float64 it widens to.
+- A Go `float32` or Rust `f32` is written as its own shortest digits, so 0.9 is written `0.9` and not as the float64 it widens to. C has `shclw_put_float32` for a `float`.
 
 - Infinity and NaN are refused with `BadValue`, and nothing changes, since no read would take them back.
+
+- C has no `any`, so it has a put per type, `shclw_put_int` to `shclw_put_floats`. `shclw_each` gives `shclw_node`s, and `shclw_child` takes the name with its length, so a name from `shclw_names` goes in as it came out.
 
 ### Format and upgrade
 
@@ -395,7 +397,7 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 
 - C hands everything back in memory the caller owns, and frees with `free()`: strings, arrays, the text, and diagnostics, each as one block. shcl keeps what each read gives out until the document is freed, and a program reading in a loop grew without end, so every C read copies its answer out and gives shcl's read memory back before it returns. "Valid until the next call" was the other choice. It costs no copy, but a second read quietly breaks the first one's pointer.
 	- So a result from shcl's own read calls on `shclw_inner(d)` is good only until the next shclw call. That's the price of mixing the two.
-	- Edits grow shcl's write memory the same way, until `shcl_compact`. Whether `Write` compacts is for the edits to settle.
+	- Edits grow shcl's write memory the same way, until `shcl_compact`. `shclw_write` compacts after a good save, so a program that edits and saves in a loop stays level. A save is where a round of edits ends, and it already costs a pass over the document. Compacting on every edit would cost that pass each time. A program that edits in a loop and never saves can call `shcl_compact` on `shclw_inner(d)` itself.
 
 - Every C string handed back has its length and a NUL after it. A value can hold a NUL, so the length is the one to go by, and the NUL is there so a string can go straight to a C call that wants one. Values and document text going in take a pointer and a length. Paths and file names are plain C strings, since a path with a NUL in it means nothing to shcl or the OS.
 

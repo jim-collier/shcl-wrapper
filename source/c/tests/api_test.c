@@ -5,9 +5,11 @@
 // what, strings holding a NUL, and memory over many reads. The Makefile also
 // builds this as C++.
 
-#include "shclw.h"
+// The adapter header too, for the read-back check, which no 3.0 put fails.
+#include "shclw_adapter.h"
 
 #include <errno.h>
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -249,8 +251,444 @@ static void test_errors(void) {
 	shclw_free(d);
 }
 
+static bool text_is(shclw_doc *d, const char *want) {
+	size_t len = 0;
+	char *t = shclw_text(d, &len);
+	bool same = t && len == strlen(want) && !memcmp(t, want, len);
+	if (t && !same) {
+		(void)fprintf(stderr, "text: %s\n", t);
+	}
+	free(t);
+	return same;
+}
+
+static void test_walk(void) {
+	shclw_doc *d = parse_z("a: 1\nb:\n\tc: 2\n\tC: 3\n\t\"\xC3\x89\": 4\n\t\"\xC3\xA9\": 5\n\tc: 6\n");
+	CHECK(shclw_has(d, "b.c") && !shclw_has(d, "nope"));
+	CHECK(shclw_count(d, "b.c") == 3 && shclw_count(d, "nope") == 0);
+	CHECK(shclw_line(d, "a") == 1 && shclw_line(d, "b.c") == 0);
+	// ASCII case only, as shcl matches names. É and é are 2 keys.
+	size_t n = 0;
+	shclw_string *names = shclw_names(d, "b", &n);
+	CHECK(names && n == 3);
+	if (names && n == 3) {
+		CHECK(!strcmp(names[0].p, "c") && names[1].n == 2 && names[2].n == 2 && names[1].p[1] != names[2].p[1]);
+	}
+	free(names);
+	names = shclw_names(d, "nope", &n);
+	CHECK(names && n == 0);
+	free(names);
+
+	shclw_node *nodes = shclw_each(d, "b.c", &n);
+	CHECK(nodes && n == 3);
+	for (size_t i = 0; nodes && i < n; i++) {
+		CHECK(shclw_line(d, nodes[i].path.p) == nodes[i].line && nodes[i].path.n == strlen(nodes[i].path.p));
+	}
+	if (nodes && n == 3) {
+		CHECK(shclw_int(d, nodes[1].path.p, 0) == 3 && !strcmp(nodes[2].value.p, "6"));
+	}
+	free(nodes);
+	shclw_free(d);
+
+	// A wildcard lists the nodes it reaches, each read alone.
+	d = parse_z("a:\n\tx:\n\t\tb: 1\n\tz:\n\t\tb: 2\n\ty:\n\t\tc: 3\n\tx: again\n\t\tb: 4\n");
+	nodes = shclw_each(d, "a.*.b", &n);
+	CHECK(nodes && n == 3);
+	for (size_t i = 0; nodes && n == 3 && i < n; i++) {
+		static const size_t lines[] = {3, 5, 9};
+		static const int64_t values[] = {1, 2, 4};
+		CHECK(nodes[i].line == lines[i] && shclw_int(d, nodes[i].path.p, 0) == values[i]);
+	}
+	free(nodes);
+	char *last = shclw_last(d, "a.*.b", NULL);
+	CHECK(last && shclw_int(d, last, 0) == 4);
+	free(last);
+	shclw_free(d);
+
+	// A name that needs quoting, and one holding a NUL, still read through
+	// shclw_child.
+	d = shclw_new();
+	CHECK(shclw_put_int(d, "\"x.y\"", 1, NULL) == SHCLW_OK);
+	size_t len = 0;
+	char *child = shclw_child(d, "", "x.y", 3, &len);
+	CHECK(child && len == strlen(child) && shclw_int(d, child, 0) == 1);
+	free(child);
+	child = shclw_child(d, "top", "a\0b", 3, &len);
+	CHECK(child && len == strlen(child) && !strncmp(child, "top.", 4));
+	CHECK(child && shclw_put_int(d, child, 7, NULL) == SHCLW_OK && shclw_int(d, child, 0) == 7);
+	free(child);
+	shclw_free(d);
+}
+
+// First and Last pick by line, and an instance a put made sorts last with
+// line 0. Go's TestFirstLast.
+static void test_first_last(void) {
+	shclw_doc *d = parse_z("p: 1\ntv: a\n\tf: 1\ntv: b\n\tf: 2\ntv: a\n\tf: 3\np: 2\n");
+	char *p = shclw_last(d, "p", NULL);
+	CHECK(p && shclw_int(d, p, 9) == 2);
+	CHECK(p && shclw_put_int(d, p, 5, NULL) == SHCLW_OK);
+	free(p);
+	p = shclw_first(d, "tv.f", NULL);
+	CHECK(p && shclw_int(d, p, 9) == 1);
+	free(p);
+	p = shclw_last(d, "tv.f", NULL);
+	CHECK(p && shclw_int(d, p, 9) == 3);
+	free(p);
+	CHECK(shclw_int(d, "p", 9) == 9);
+	size_t n = 0;
+	size_t *lines = shclw_lines(d, "p", &n);
+	CHECK(lines && n == 2 && lines[0] == 1 && lines[1] == 8);
+	free(lines);
+
+	shclw_node *tv = shclw_each(d, "tv", &n);
+	CHECK(tv && n == 2);
+	if (tv && n == 2) {
+		char *g1 = shclw_child(d, tv[1].path.p, "g", 1, NULL);
+		char *g0 = shclw_child(d, tv[0].path.p, "g", 1, NULL);
+		CHECK(g1 && g0 && shclw_put_int(d, g1, 2, NULL) == SHCLW_OK && shclw_put_int(d, g0, 1, NULL) == SHCLW_OK);
+		free(g1);
+		free(g0);
+	}
+	free(tv);
+	p = shclw_last(d, "tv.g", NULL);
+	CHECK(p && shclw_int(d, p, 9) == 2);
+	free(p);
+	lines = shclw_lines(d, "tv.g", &n);
+	CHECK(lines && n == 2 && lines[0] == 0 && lines[1] == 0);
+	free(lines);
+	shclw_free(d);
+
+	// A put-made instance counts after the ones from the file, though Each
+	// lists it first.
+	d = parse_z("tv: a\ntv: b\n\tf: 1\n");
+	tv = shclw_each(d, "tv", &n);
+	char *f0 = tv && n == 2 ? shclw_child(d, tv[0].path.p, "f", 1, NULL) : NULL;
+	CHECK(f0 && shclw_put_int(d, f0, 2, NULL) == SHCLW_OK);
+	free(f0);
+	free(tv);
+	p = shclw_first(d, "tv.f", NULL);
+	CHECK(p && shclw_int(d, p, 9) == 1);
+	free(p);
+	p = shclw_last(d, "tv.f", NULL);
+	CHECK(p && shclw_int(d, p, 9) == 2);
+	free(p);
+	lines = shclw_lines(d, "tv.f", &n);
+	CHECK(lines && n == 2 && lines[0] == 3 && lines[1] == 0);
+	free(lines);
+	size_t len = 0;
+	p = shclw_last(d, "nope", &len);
+	CHECK(p && len == 4 && !strcmp(p, "nope"));
+	free(p);
+	lines = shclw_lines(d, "nope", &n);
+	CHECK(lines && n == 0);
+	free(lines);
+	shclw_free(d);
+}
+
+static void test_puts(void) {
+	shclw_doc *d = shclw_new();
+	shclw_error err;
+	CHECK(shclw_put_int(d, "i", -7, &err) == SHCLW_OK && err.kind == SHCLW_OK);
+	CHECK(shclw_put_float(d, "f", 0.25, NULL) == SHCLW_OK);
+	CHECK(shclw_put_bool(d, "b", true, NULL) == SHCLW_OK);
+	CHECK(shclw_put_str(d, "s", "a\0b", 3, NULL) == SHCLW_OK);
+	shclw_string items[2];
+	items[0].p = "x\0y";
+	items[0].n = 3;
+	items[1].p = "";
+	items[1].n = 0;
+	CHECK(shclw_put_strs(d, "ss", items, 2, NULL) == SHCLW_OK);
+	static const int64_t ints[] = {1, -2, INT64_MAX};
+	CHECK(shclw_put_ints(d, "is", ints, 3, NULL) == SHCLW_OK);
+	static const double floats[] = {1.5, -0.125};
+	CHECK(shclw_put_floats(d, "fs", floats, 2, NULL) == SHCLW_OK);
+	CHECK(shclw_put_ints(d, "none", NULL, 0, NULL) == SHCLW_OK);
+	CHECK(shclw_put_syntax(d, "lit", "[80, 443]", 9, NULL) == SHCLW_OK);
+	CHECK(shclw_comment(d, "i", "the i", 5, NULL) == SHCLW_OK);
+
+	CHECK(shclw_int(d, "i", 0) == -7 && shclw_float(d, "f", 0) == 0.25 && shclw_bool(d, "b", false));
+	shclw_got_str s = shclw_get_str(d, "s");
+	CHECK(s.status == SHCLW_GOOD && s.len == 3 && s.value[1] == '\0' && s.value[2] == 'b');
+	free(s.value);
+	shclw_got_strs ss = shclw_get_strs(d, "ss");
+	CHECK(ss.status == SHCLW_GOOD && ss.n == 2 && ss.value[0].n == 3 && ss.value[1].n == 0);
+	free(ss.value);
+	shclw_got_ints li = shclw_get_ints(d, "lit");
+	CHECK(li.status == SHCLW_GOOD && li.n == 2 && li.value[1] == 443);
+	free(li.value);
+
+	// Refused values change nothing.
+	size_t before_len = 0;
+	char *before = shclw_text(d, &before_len);
+	CHECK(shclw_put_float(d, "f", NAN, &err) == SHCLW_ERR_BAD_VALUE && strstr(err.msg, "finite"));
+	CHECK(shclw_put_float(d, "g", INFINITY, NULL) == SHCLW_ERR_BAD_VALUE);
+	CHECK(shclw_put_float32(d, "g", -INFINITY, NULL) == SHCLW_ERR_BAD_VALUE);
+	static const double bad[] = {1, NAN};
+	CHECK(shclw_put_floats(d, "fs", bad, 2, NULL) == SHCLW_ERR_BAD_VALUE);
+	CHECK(shclw_put_int(d, "a.*.b", 1, &err) == SHCLW_ERR_BAD_PATH && strstr(err.msg, "a.*.b"));
+	CHECK(shclw_comment(d, "i", "two\nlines", 9, NULL) == SHCLW_ERR_BAD_VALUE);
+	CHECK(shclw_put_syntax(d, "lit", "[1,", 3, NULL) == SHCLW_ERR_BAD_VALUE);
+	CHECK(!shclw_has(d, "g"));
+	size_t after_len = 0;
+	char *after = shclw_text(d, &after_len);
+	CHECK(before && after && before_len == after_len && !memcmp(before, after, after_len));
+	free(before);
+	free(after);
+
+	// PutSyntax's whole text has to read back. The edit stays.
+	CHECK(shclw_put_syntax(d, "c", "a # b", 5, &err) == SHCLW_ERR_NO_READ_BACK && err.kind == SHCLW_ERR_NO_READ_BACK);
+	CHECK(shclw_has(d, "c"));
+	shclw_free(d);
+}
+
+// Go's TestVerifyPut.
+static void test_verify_put(void) {
+	shclw_doc *d = parse_z("a: 1\n");
+	shclw_i_value v = shclw_i_value_of(SHCLW_I_INT, 0);
+	v.i = 1;
+	CHECK(shclw_i_verify_put(d, "a", &v, NULL) == SHCLW_OK);
+	v.i = 2;
+	shclw_error err;
+	CHECK(shclw_i_verify_put(d, "a", &v, &err) == SHCLW_ERR_NO_READ_BACK && strstr(err.msg, "different value"));
+	v = shclw_i_value_of(SHCLW_I_STRS, 0);
+	CHECK(shclw_i_verify_put(d, "nope", &v, &err) == SHCLW_ERR_NO_READ_BACK && strstr(err.msg, "NotFound"));
+	shclw_string item;
+	item.p = "1";
+	item.n = 1;
+	v = shclw_i_value_of(SHCLW_I_STRS, 1);
+	v.strs = &item;
+	CHECK(shclw_i_verify_put(d, "a", &v, NULL) == SHCLW_OK);
+	item.p = "1\0";
+	item.n = 2;
+	CHECK(shclw_i_verify_put(d, "a", &v, NULL) == SHCLW_ERR_NO_READ_BACK);
+	shclw_free(d);
+}
+
+// A float32 goes in as its own shortest digits. Go's TestPutFloat32, with
+// want from Go's strconv.FormatFloat(float64(f), 'g', -1, 32).
+static void test_put_float32(void) {
+	static const struct {
+		float f;
+		double want;
+		const char *text;
+	} cases[] = {
+		{0.9f, 0.9, "f: 0.9\n"},
+		{0.1f, 0.1, "f: 0.1\n"},
+		{-2.5f, -2.5, "f: -2.5\n"},
+		{1e-10f, 1e-10, NULL},
+		{FLT_MAX, 3.4028235e+38, NULL},
+		{16777216, 1.6777216e+07, NULL},
+		{FLT_TRUE_MIN, 1e-45, NULL},
+		// 2^-12 is an exact tie at 8 digits. Go rounds it up, where glibc's
+	    // printf goes to even.
+		{0x1p-12f, 0.00024414063, NULL},
+		{-0.0f, -0.0, NULL},
+	};
+	for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+		shclw_doc *d = shclw_new();
+		CHECK(shclw_put_float32(d, "f", cases[i].f, NULL) == SHCLW_OK);
+		shclw_got_float g = shclw_get_float(d, "f");
+		CHECK(g.status == SHCLW_GOOD && g.value == cases[i].want && (float)g.value == cases[i].f);
+		CHECK(signbit(g.value) == signbit(cases[i].want));
+		if (cases[i].text) {
+			CHECK(text_is(d, cases[i].text));
+		}
+		shclw_free(d);
+	}
+	shclw_doc *d = shclw_new();
+	CHECK(shclw_put_float32(d, "f", NAN, NULL) == SHCLW_ERR_BAD_VALUE && !shclw_has(d, "f"));
+	shclw_free(d);
+}
+
+// The digits floats print and float32 puts write with, against Go's
+// strconv.FormatFloat. An exact tie goes to even. At a power of 2 it goes
+// up, except the one Go leaves at even.
+static void test_shortest(void) {
+	static const struct {
+		double f;
+		const char *digits;
+		int exp;
+		bool single;
+	} cases[] = {
+		{0x1p-25, "29802322387695312", -8, false},
+		{-0x1p-25, "29802322387695312", -8, false},
+		{0x1p-12, "24414063", -4, true},
+		{0x1p-54, "5551115", -17, true},
+		{7.120236347223045e-307, "7120236347223045", -307, false},
+		{0.1, "1", -1, false},
+	};
+	for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+		char digits[40];
+		int exp = 0;
+		shclw_i_shortest(cases[i].f, cases[i].single, digits, &exp);
+		size_t n = strlen(digits);
+		while (n > 1 && digits[n - 1] == '0') {
+			digits[--n] = '\0';
+		}
+		if (strcmp(digits, cases[i].digits) != 0 || exp != cases[i].exp) {
+			(void)fprintf(stderr, "shortest %a: %s e%d\n", cases[i].f, digits, exp);
+		}
+		CHECK(!strcmp(digits, cases[i].digits) && exp == cases[i].exp);
+	}
+}
+
+// tv and u.v repeat at an inner step, n at the last one. Go's
+// TestEditsRefuseSeveral, TestEditsOnOneInstance, and TestRemoveTakesAll.
+static const char several[] = "tv: one\n\tg: 1\ntv: two\nn: 1\nn: 2\nu:\n\tv: 1\n\tv: 2\n\t\tw: 1\n";
+
+// How many lines of a and of b sit between their common first and last
+// lines. Go's hunk.
+static bool hunk(const char *a, const char *b, size_t *gone, size_t *added) {
+	enum { MAX_LINES = 64 };
+	const char *la[MAX_LINES];
+	const char *lb[MAX_LINES];
+	size_t na = 0;
+	size_t nb = 0;
+	for (const char *p = a; *p && na < MAX_LINES; p = strchr(p, '\n') + 1) {
+		la[na++] = p;
+		if (!strchr(p, '\n')) {
+			return false;
+		}
+	}
+	for (const char *p = b; *p && nb < MAX_LINES; p = strchr(p, '\n') + 1) {
+		lb[nb++] = p;
+		if (!strchr(p, '\n')) {
+			return false;
+		}
+	}
+	size_t head = 0;
+	while (head < na && head < nb && strcspn(la[head], "\n") == strcspn(lb[head], "\n") &&
+	       !strncmp(la[head], lb[head], strcspn(la[head], "\n"))) {
+		head++;
+	}
+	size_t tail = 0;
+	while (tail < na - head && tail < nb - head) {
+		const char *x = la[na - 1 - tail];
+		const char *y = lb[nb - 1 - tail];
+		if (strcspn(x, "\n") != strcspn(y, "\n") || strncmp(x, y, strcspn(x, "\n")) != 0) {
+			break;
+		}
+		tail++;
+	}
+	*gone = na - head - tail;
+	*added = nb - head - tail;
+	return true;
+}
+
+static shclw_kind edit(shclw_doc *d, int which, const char *path) {
+	switch (which) {
+	case 0: return shclw_put_int(d, path, 5, NULL);
+	case 1: return shclw_put_syntax(d, path, "6", 1, NULL);
+	default: return shclw_comment(d, path, "c", 1, NULL);
+	}
+}
+
+static void test_several(void) {
+	static const char *const paths[] = {"n", "n.x", "tv", "tv.g", "tv.h", "tv.g.h", "u.v", "u.v.w", "u.v.w.x"};
+	for (int which = 0; which < 3; which++) {
+		for (size_t i = 0; i < sizeof paths / sizeof paths[0]; i++) {
+			shclw_doc *d = parse_z(several);
+			CHECK(edit(d, which, paths[i]) == SHCLW_ERR_BAD_PATH);
+			CHECK(text_is(d, several));
+			shclw_free(d);
+		}
+	}
+
+	// Paths from Each, First, and Last name one instance at every step.
+	shclw_doc *d = parse_z(several);
+	char *one[8] = {NULL};
+	size_t at = 0;
+	size_t n = 0;
+	shclw_node *nodes = shclw_each(d, "tv", &n);
+	for (size_t i = 0; nodes && i < n && at < 8; i++) {
+		one[at++] = shclw_child(d, nodes[i].path.p, "h", 1, NULL);
+	}
+	free(nodes);
+	nodes = shclw_each(d, "n", &n);
+	for (size_t i = 0; nodes && i < n && at < 8; i++) {
+		one[at] = (char *)malloc(nodes[i].path.n + 1);
+		if (one[at]) {
+			memcpy(one[at], nodes[i].path.p, nodes[i].path.n + 1);
+		}
+		at++;
+	}
+	free(nodes);
+	one[at++] = shclw_first(d, "tv.g", NULL);
+	one[at++] = shclw_last(d, "u.v.w", NULL);
+	one[at++] = shclw_last(d, "n", NULL);
+	shclw_free(d);
+	CHECK(at == 7);
+	for (int which = 0; which < 3; which++) {
+		for (size_t i = 0; i < at; i++) {
+			d = parse_z(several);
+			CHECK(one[i] && edit(d, which, one[i]) == SHCLW_OK);
+			// A put adds or changes a line, and a comment on a new name adds 2.
+			// Two instances changed are 2 places, with the lines between them in
+			// the hunk.
+			size_t len = 0;
+			char *t = shclw_text(d, &len);
+			size_t gone = 0;
+			size_t added = 0;
+			CHECK(t && hunk(several, t, &gone, &added) && gone <= 1 && added <= 2);
+			free(t);
+			shclw_free(d);
+		}
+	}
+	for (size_t i = 0; i < at; i++) {
+		free(one[i]);
+	}
+
+	static const char *const all[] = {"n", "tv.g", "u.v", "u.v.w"};
+	for (size_t i = 0; i < sizeof all / sizeof all[0]; i++) {
+		d = parse_z(several);
+		size_t want = shclw_count(d, all[i]);
+		CHECK(shclw_remove(d, all[i]) == want && want > 0 && !shclw_has(d, all[i]));
+		shclw_free(d);
+	}
+}
+
+// Edits leave what they replaced in shcl's write memory, and a save gives it
+// back, so a program that edits and saves in a loop stays level.
+static void test_saves_give_back(void) {
+#if defined(__GLIBC__) && !defined(UNDER_ASAN)
+	enum { BIG = 16 * 1024 };
+	char *value = (char *)malloc(BIG);
+	CHECK(value != NULL);
+	if (!value) {
+		return;
+	}
+	memset(value, 'x', BIG);
+	shclw_doc *d = parse_z("# note\nk: 1\nn: 2\n");
+	struct mallinfo2 before = mallinfo2();
+	for (int i = 0; i < 201; i++) {
+		if (i == 1) {
+			before = mallinfo2();
+		}
+		value[0] = (char)('a' + i % 26);
+		CHECK(shclw_put_str(d, "k", value, BIG, NULL) == SHCLW_OK);
+		CHECK(shclw_write(d, in_scratch("loop.shcl"), NULL) == SHCLW_OK);
+	}
+	struct mallinfo2 after = mallinfo2();
+	size_t grew = after.uordblks > before.uordblks ? after.uordblks - before.uordblks : 0;
+	if (grew > (size_t)256 * 1024) {
+		(void)fprintf(stderr, "200 puts and saves kept %zu bytes\n", grew);
+	}
+	CHECK(grew <= (size_t)256 * 1024);
+	// The kept lines and the load's own lines are still there.
+	CHECK(shclw_line(d, "n") == 3);
+	size_t len = 0;
+	char *t = shclw_text(d, &len);
+	CHECK(t && !strncmp(t, "# note\nk: ", 10) && len > BIG);
+	free(t);
+	free(value);
+	shclw_free(d);
+#else
+	(void)puts("api: memory over many saves isn't measured in this build");
+#endif
+}
+
 static void cleanup(void) {
-	static const char *const made[] = {"nul.shcl", "bad.shcl", "newer.shcl", "good.shcl", "strict.shcl"};
+	static const char *const made[] = {"nul.shcl", "bad.shcl", "newer.shcl", "good.shcl", "strict.shcl", "loop.shcl"};
 	for (size_t i = 0; i < sizeof made / sizeof made[0]; i++) {
 		if (unlink(in_scratch(made[i])) != 0 && errno != ENOENT) {
 			(void)fprintf(stderr, "couldn't remove %s\n", in_scratch(made[i]));
@@ -273,6 +711,14 @@ int main(void) {
 	test_nul();
 	test_reads_give_back();
 	test_errors();
+	test_walk();
+	test_first_last();
+	test_puts();
+	test_verify_put();
+	test_put_float32();
+	test_shortest();
+	test_several();
+	test_saves_give_back();
 	cleanup();
 	if (failures) {
 		(void)fprintf(stderr, "api: %d failed\n", failures);

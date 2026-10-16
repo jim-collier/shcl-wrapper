@@ -601,6 +601,7 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- Each `shcl.h` with each `SHCLW_SHCL`, or none, compiles only with the right one, in C and C++.
 	- Note: no test reaches the temp file cleanup after a failed 1.2 save, since every failure that can be set up comes before the temp file exists.
 	- Branch: c-old
+	- Commit: c003a9f
 	- Test case: `make pick`, `test_save`, and the 1.2 and 2.0 sides of `test_errors`, `test_upgrade`, `test_info`, and `test_rewrites` in `source/c/tests/api_test.c`. The shared cases on all 3 versions through `cicd/c_cases.py`.
 	- Swept: every row of design.md's "evens out" table has a case or an API test that runs on C 1.2 and 2.0, but the 2.x upgrade refusal, which is 3.0's alone. Every call `shclw3.c` defines is in `shclw1.c` and `shclw2.c`, which each link checks. The notes in `shclw.h` and design.md that hold only on 3.0 now say so.
 	- Acceptance signoff: Waiting. The `SHCLW_SHCL` macro, and leaving the 1.2 and 2.0 memory growth as a documented limit, were choices.

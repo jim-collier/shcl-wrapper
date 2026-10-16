@@ -135,6 +135,12 @@ void shclw_free(shclw_doc *d) {
 
 shcl_doc *shclw_inner(shclw_doc *d) { return d->d; }
 
+void shclw_compact(shclw_doc *d) {
+	if (d) {
+		shcl_compact(d->d);
+	}
+}
+
 // Every field's path and value and the load's error codes, for
 // shclw_i_finish_info to tell a comment from a raw body's line.
 static char *values(const char *text, size_t len, size_t *n) {

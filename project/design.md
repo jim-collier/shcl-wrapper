@@ -130,6 +130,8 @@ Go names are listed. Rust uses the same words in snake case, and `ShclDoc` has t
 	- On 3.0 it builds the save's text to find out, so it costs about what `Text` does.
 	- `InfoBlock` and `StampFormat` don't change it. They touch only the block and the Format line, and the rest of the save is what it was.
 
+- C also has `shclw_compact`, for a program that edits a lot between saves. [Decisions](#decisions) says why.
+
 ### Reads
 
 - 2 tiers, as in shcl's own design.
@@ -400,7 +402,7 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 
 - C hands everything back in memory the caller owns, and frees with `free()`: strings, arrays, the text, and diagnostics, each as one block. shcl keeps what each read gives out until the document is freed, and a program reading in a loop grew without end, so every C read copies its answer out and gives shcl's read memory back before it returns. "Valid until the next call" was the other choice. It costs no copy, but a second read quietly breaks the first one's pointer.
 	- So a result from shcl's own read calls on `shclw_inner(d)` is good only until the next shclw call. That's the price of mixing the two.
-	- Edits grow shcl's write memory the same way, until `shcl_compact`. `shclw_write` compacts after a good save, so a program that edits and saves in a loop stays level. A save is where a round of edits ends, and it already costs a pass over the document. Compacting on every edit would cost that pass each time. A program that edits in a loop and never saves can call `shcl_compact` on `shclw_inner(d)` itself.
+	- Edits grow shcl's write memory the same way, until `shcl_compact`. `shclw_write` compacts after a good save, so a program that edits and saves in a loop stays level. A save is where a round of edits ends, and it already costs a pass over the document. Compacting on every edit would cost that pass each time. A program that edits in a loop and never saves can call `shclw_compact`, which does nothing on 1.2 and 2.0. It's C's own, as `shcl_compact` is shcl's, since Go and Rust free that memory themselves.
 
 - Every C string handed back has its length and a NUL after it. A value can hold a NUL, so the length is the one to go by, and the NUL is there so a string can go straight to a C call that wants one. Values and document text going in take a pointer and a length. Paths and file names are plain C strings, since a path with a NUL in it means nothing to shcl or the OS.
 

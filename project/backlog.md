@@ -230,84 +230,6 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Note: 2026101513330010 and 2026101513330011 can reuse the block finder in `shclw/info.go` and `src/info.rs`, which already finds 2.x's `#` block.
 	- Acceptance signoff: Waiting. New API that changes what a program writes to disk.
 
-- C: header, loading, saving, and reads on shcl 3.0
-	- ID: 2026101516110959
-	- Type: Feature
-	- Status: Waiting on signoff
-	- Priority: High
-	- Opened: 20261015-161111
-	- Opened by: JC
-	- Parent ID: 2026101512024159
-	- Related IDs: 2026101513330046, 2026101513330047
-	- Requirements:
-		- `shclw.h` over shcl 3.0's `shcl.h`, usable from C and C++.
-		- New, Parse, Open, Text, Canonical, Write, diagnostics, errors, and both read tiers for every type.
-		- Settle who owns and frees what a read gives, and how strings keep their length.
-		- A C driver for the ops these cover, run against the shared cases from cicd.
-	- Progress log:
-		- 20261015: `source/c` has `shclw.h` over 3.0's `shcl.h`, the shared code in `shclw.c`, the 3.0 adapter in `shclw3.c`, `shclw_run`, and a driver. cicd checks its format, lints it, compiles it at C17 with gcc-15 and as C++, runs the API tests sanitized and plain, and runs the shared cases through the driver.
-		- The driver has parse, text, canonical, diags, errors, get, or, and write. The other ops answer `error notyet`, and cicd lists which ones each case skipped. 2 cases run whole so far, and 62 ops are compared.
-		- C's `got` has no `text`, the value as typed, since shcl's C binding has no call that gives it. design.md says why.
-		- 1.2's and 2.0's `shcl.h` define the same macros, so the 1.2 and 2.0 item needs a way to pick between them. design.md lists it under open questions.
-	- Decisions:
-		- Names are Go's in snake case with a `shclw_` prefix, and the document goes first.
-		- One header. The version comes from what `shcl.h` declares, and each version has its own adapter file.
-		- A call that can fail returns a `shclw_kind`, with details in a `shclw_error` that may be NULL.
-		- cicd gets `shcl.h` by commit, checked by sha256, into `cicd/cache/`.
-	- Verified: the gate passes. About 1,300 generated 3.0 cases, cut to the ops C has, gave the same output from the C and Go drivers, and so did 34,000 floats with every power of 2 among them.
-	- Branch: c-core
-	- Commit: 22da342
-	- Test case: `source/c/tests/api_test.c`, and the shared cases through `cicd/c_cases.py`. New case `029-load-save` covers text, canonical, and write with no edits, and `011-floats` has 2 new float lines.
-
-- C: copy reads out and free shcl's read memory
-	- ID: 2026101513330046
-	- Type: Feature
-	- Status: Waiting on signoff
-	- Priority: High
-	- Opened: 20261015-133300
-	- Opened by: JC
-	- Parent ID: 2026101512024159
-	- Note: shcl keeps every string read until the document is freed. Folderkite saw 19 MB after 200,000 reads, so it releases reads after each one and compacts after a save.
-	- Progress log:
-		- 20261015: Every C read copies its answer into memory the caller frees with `free()`, one block per result, then gives shcl's read memory back. Text and Canonical do the same.
-		- Edits grow shcl's write memory too, until `shcl_compact`. That's for 2026101516110996, where Put comes in.
-	- Decisions:
-		- The caller owns what a read gives. "Valid until the next call" was the other choice, and a second read would quietly break the first one's pointer.
-	- Swept: all 13 places in `shclw3.c` that read through shcl give the memory back, Write's 2 included. The other reads go through those.
-	- Branch: c-core
-	- Commit: 22da342
-	- Test case: `test_reads_give_back` in `source/c/tests/api_test.c`. 200,000 reads keep under 64 KB. With the give-back taken out they kept 44 MB and the test failed.
-
-- C: walking and writes on shcl 3.0
-	- ID: 2026101516110996
-	- Type: Feature
-	- Status: Waiting on signoff
-	- Priority: High
-	- Opened: 20261015-161111
-	- Opened by: JC
-	- Parent ID: 2026101512024159
-	- Prereq IDs: 2026101516110959
-	- Related IDs: 2026101513330046, 2026101517145199, 2026101517145204
-	- Requirements:
-		- Has, Count, Names, Each, Child, Line, Lines, First, and Last.
-		- Put, PutSyntax, Comment, and Remove, with the same read-back check as Go and Rust.
-	- Progress log:
-		- 20261015: `shclw.h` has the walking calls, a put for each type, PutSyntax, Comment, and Remove. Every put goes through one read-back check in `shclw.c`. A path with several instances is `BadPath`, which 3.0 refuses by itself. 16 shared cases run whole in C, and the ops C still skips are check, format, upgrade, info, stamp, and rewrites, all for 2026101516111033.
-		- The question 2026101513330046 left here is settled: `shclw_write` compacts the document after a good save. Without that, 200 puts of a 16 KB string with a save after each kept 4.3 MB.
-		- glibc's `printf` rounds an exact tie to even, and Go rounds it up at a power of 2. So the float32 2^-12 came out as 0.00024414062 where Go writes 0.00024414063. The digits helper now follows Go, and the floats `run.c` prints use the same helper.
-		- 2 Go and Rust differences found on the way, logged as 2026101517145199 and 2026101517145204. C follows Go in both.
-	- Decisions:
-		- C has no `any`, so there's a put per type. A `float` has its own, `shclw_put_float32`.
-		- `shclw_write` compacts after a good save, rather than after every edit or never. A program that edits in a loop and never saves can compact through `shclw_inner`.
-		- `Names` folds ASCII case only, as shcl matches names and as Rust does.
-		- `shclw_child` takes the name with its length, as values going in do, and gives back a path.
-	- Verified: the gate passes. C's float digits match Go's on 400,000 doubles and 600,000 float32 values, with every power of 2 and its neighbors among them. Each new test failed with its rule taken out: the compaction, float32 digits, both tie rules, the read-back, the several-instances refusal, the order of instances a put made, and the name dedupe.
-	- Branch: c-walk
-	- Commit: 78d6b88
-	- Test case: `test_walk`, `test_first_last`, `test_puts`, `test_verify_put`, `test_put_float32`, `test_shortest`, `test_several`, and `test_saves_give_back` in `source/c/tests/api_test.c`. New case `030-edit-after-save`, and the shared cases through `cicd/c_cases.py`.
-	- Swept: every new read in `shclw3.c` gives shcl's read memory back. The setter status map has every `shcl_set_status`, as Go's has. `run.c`'s float prints and `shclw_put_float32` share the one digits helper.
-	- Acceptance signoff: Waiting. The put calls and where the compaction happens were choices.
-
 - C: format, upgrade, and the info block on shcl 3.0
 	- ID: 2026101516111033
 	- Type: Feature
@@ -458,22 +380,6 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Swept: Put, PutSyntax, Comment, and Remove in Go `shclw1` to `shclw3` and Rust `v1` to `v3`, each on the first, an inner, and the last step of a path, with the rest there and not there. 3.0 needs no check of its own, since shcl 3.0 refuses these itself, and the test walks it too. Remove takes every instance on every version, as decided. No other `Doc` or `ShclDoc` method edits the document. `Write` and `UpgradeFile` take a file path, not a document path.
 	- Acceptance signoff: Waiting. `First` and `Last` now give a narrowed path for a single instance, which changes what design.md said.
 
-- C: strings with lengths
-	- ID: 2026101513330047
-	- Type: Feature
-	- Status: Waiting on signoff
-	- Priority: Avg
-	- Opened: 20261015-133300
-	- Opened by: JC
-	- Parent ID: 2026101512024159
-	- Note: shcl strings aren't NUL-terminated and can hold a NUL. Cobblevale garbled non-ASCII text, and Folderkite cut a save short at a NUL.
-	- Progress log:
-		- 20261015: Every string C hands back has its length and a NUL after it, so it can go straight to a C call, and the length keeps any NUL inside. Values and text going in take a length. Paths and file names are plain C strings.
-	- Swept: `shclw.h` has no call that hands back or takes a value without its length. Diagnostics, array items, and fallbacks have one too.
-	- Branch: c-core
-	- Commit: 22da342
-	- Test case: `test_nul` and the fallback lines in `test_fallbacks`, in `source/c/tests/api_test.c`. A value holding a NUL, and text and a save holding one, keep every byte. With copies cut at the first NUL, 3 checks failed.
-
 - Each on a wildcard path gives paths that don't read one instance
 	- ID: 2026101515055253
 	- Type: Bug
@@ -580,6 +486,7 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- shcl's C header has no version macro before 3.0, so 1.2 and 2.0 are told apart by what they declare.
 	- Progress log:
 		- 20261015: split into 5 parts, each its own item below. This closes when they do.
+		- 20261016: core, read memory, walking and writes, and string lengths are Done. Format and upgrade, and 1.2 and 2.0, wait on signoff. Fuzzing is next.
 
 - C: fuzz against Go
 	- ID: 2026101516111107
@@ -907,7 +814,8 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- A macro that leaves the `shclw3_v2` files and 2.0's `shcl.h` out of a 3.0 build.
 		- An upgrade of a 2.x file in that build doesn't pass along lines 2.0 would have refused.
 	- Note: Both C programs are on 3.0, and moving onto the wrapper would build 2.0 into each. Cobblevale builds shcl inside an Unreal module with `SHCL_NO_FILE_IO`. 2.0 ends the program when memory runs out.
-	- Note: Still open is whether, without 2.0, an upgrade of a 2.x file is refused, or goes ahead marked unchecked.
+	- Decisions:
+		- 20261016, JC: without 2.0, an upgrade of a 2.x file is refused. A program that needs it builds 2.0 in.
 
 - Write into a folder that doesn't exist says IO on 1.2 and 2.0, and NotFound on 3.0
 	- ID: 2026101518385490
@@ -1107,6 +1015,90 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Closed: 20261015-135423
 	- Acceptance signoff: Self-closed: mechanical rename.
 
+- C: header, loading, saving, and reads on shcl 3.0
+	- ID: 2026101516110959
+	- Type: Feature
+	- Status: Done
+	- Priority: High
+	- Opened: 20261015-161111
+	- Opened by: JC
+	- Parent ID: 2026101512024159
+	- Related IDs: 2026101513330046, 2026101513330047
+	- Requirements:
+		- `shclw.h` over shcl 3.0's `shcl.h`, usable from C and C++.
+		- New, Parse, Open, Text, Canonical, Write, diagnostics, errors, and both read tiers for every type.
+		- Settle who owns and frees what a read gives, and how strings keep their length.
+		- A C driver for the ops these cover, run against the shared cases from cicd.
+	- Progress log:
+		- 20261015: `source/c` has `shclw.h` over 3.0's `shcl.h`, the shared code in `shclw.c`, the 3.0 adapter in `shclw3.c`, `shclw_run`, and a driver. cicd checks its format, lints it, compiles it at C17 with gcc-15 and as C++, runs the API tests sanitized and plain, and runs the shared cases through the driver.
+		- The driver has parse, text, canonical, diags, errors, get, or, and write. The other ops answer `error notyet`, and cicd lists which ones each case skipped. 2 cases run whole so far, and 62 ops are compared.
+		- C's `got` has no `text`, the value as typed, since shcl's C binding has no call that gives it. design.md says why.
+		- 1.2's and 2.0's `shcl.h` define the same macros, so the 1.2 and 2.0 item needs a way to pick between them. design.md lists it under open questions.
+	- Decisions:
+		- Names are Go's in snake case with a `shclw_` prefix, and the document goes first.
+		- One header. The version comes from what `shcl.h` declares, and each version has its own adapter file.
+		- A call that can fail returns a `shclw_kind`, with details in a `shclw_error` that may be NULL.
+		- cicd gets `shcl.h` by commit, checked by sha256, into `cicd/cache/`.
+	- Verified: the gate passes. About 1,300 generated 3.0 cases, cut to the ops C has, gave the same output from the C and Go drivers, and so did 34,000 floats with every power of 2 among them.
+	- Branch: c-core
+	- Commit: 22da342
+	- Test case: `source/c/tests/api_test.c`, and the shared cases through `cicd/c_cases.py`. New case `029-load-save` covers text, canonical, and write with no edits, and `011-floats` has 2 new float lines.
+	- Acceptance signoff: 20261016, JC. C reads stay without the "as typed" text. A request for a C call that gives it is written up for shcl.
+	- Closed: 20261016-123500
+
+- C: copy reads out and free shcl's read memory
+	- ID: 2026101513330046
+	- Type: Feature
+	- Status: Done
+	- Priority: High
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Parent ID: 2026101512024159
+	- Note: shcl keeps every string read until the document is freed. Folderkite saw 19 MB after 200,000 reads, so it releases reads after each one and compacts after a save.
+	- Progress log:
+		- 20261015: Every C read copies its answer into memory the caller frees with `free()`, one block per result, then gives shcl's read memory back. Text and Canonical do the same.
+		- Edits grow shcl's write memory too, until `shcl_compact`. That's for 2026101516110996, where Put comes in.
+	- Decisions:
+		- The caller owns what a read gives. "Valid until the next call" was the other choice, and a second read would quietly break the first one's pointer.
+	- Swept: all 13 places in `shclw3.c` that read through shcl give the memory back, Write's 2 included. The other reads go through those.
+	- Branch: c-core
+	- Commit: 22da342
+	- Test case: `test_reads_give_back` in `source/c/tests/api_test.c`. 200,000 reads keep under 64 KB. With the give-back taken out they kept 44 MB and the test failed.
+	- Acceptance signoff: 20261016, JC. The caller owns and frees what a read gives.
+	- Closed: 20261016-123500
+
+- C: walking and writes on shcl 3.0
+	- ID: 2026101516110996
+	- Type: Feature
+	- Status: Done
+	- Priority: High
+	- Opened: 20261015-161111
+	- Opened by: JC
+	- Parent ID: 2026101512024159
+	- Prereq IDs: 2026101516110959
+	- Related IDs: 2026101513330046, 2026101517145199, 2026101517145204
+	- Requirements:
+		- Has, Count, Names, Each, Child, Line, Lines, First, and Last.
+		- Put, PutSyntax, Comment, and Remove, with the same read-back check as Go and Rust.
+	- Progress log:
+		- 20261015: `shclw.h` has the walking calls, a put for each type, PutSyntax, Comment, and Remove. Every put goes through one read-back check in `shclw.c`. A path with several instances is `BadPath`, which 3.0 refuses by itself. 16 shared cases run whole in C, and the ops C still skips are check, format, upgrade, info, stamp, and rewrites, all for 2026101516111033.
+		- The question 2026101513330046 left here is settled: `shclw_write` compacts the document after a good save. Without that, 200 puts of a 16 KB string with a save after each kept 4.3 MB.
+		- glibc's `printf` rounds an exact tie to even, and Go rounds it up at a power of 2. So the float32 2^-12 came out as 0.00024414062 where Go writes 0.00024414063. The digits helper now follows Go, and the floats `run.c` prints use the same helper.
+		- 2 Go and Rust differences found on the way, logged as 2026101517145199 and 2026101517145204. C follows Go in both.
+		- 20261016: `shclw_compact` gives back what edits left behind without a save, on branch `compact`. It does nothing on 1.2 and 2.0. 200 puts of a 16 KB string kept 4.3 MB with its body taken out, and the test failed.
+	- Decisions:
+		- C has no `any`, so there's a put per type. A `float` has its own, `shclw_put_float32`.
+		- `shclw_write` compacts after a good save, rather than after every edit or never. A program that edits in a loop and never saves can compact through `shclw_inner`.
+		- `Names` folds ASCII case only, as shcl matches names and as Rust does.
+		- `shclw_child` takes the name with its length, as values going in do, and gives back a path.
+	- Verified: the gate passes. C's float digits match Go's on 400,000 doubles and 600,000 float32 values, with every power of 2 and its neighbors among them. Each new test failed with its rule taken out: the compaction, float32 digits, both tie rules, the read-back, the several-instances refusal, the order of instances a put made, and the name dedupe.
+	- Branch: c-walk
+	- Commit: 78d6b88
+	- Test case: `test_walk`, `test_first_last`, `test_puts`, `test_verify_put`, `test_put_float32`, `test_shortest`, `test_several`, `test_saves_give_back`, and `test_compact` in `source/c/tests/api_test.c`. New case `030-edit-after-save`, and the shared cases through `cicd/c_cases.py`.
+	- Swept: every new read in `shclw3.c` gives shcl's read memory back. The setter status map has every `shcl_set_status`, as Go's has. `run.c`'s float prints and `shclw_put_float32` share the one digits helper.
+	- Acceptance signoff: 20261016, JC. A put per type, plus `shclw_put_float32`, and compacting after a good save, with `shclw_compact` for the rest.
+	- Closed: 20261016-123500
+
 - Put writes a float32 with float64 noise
 	- ID: 2026101513330006
 	- Type: Bug
@@ -1156,6 +1148,24 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Swept: `Open`, `OpenWith`, `Upgrade`, and `UpgradeFile` in Go `shclw1` to `shclw3` and Rust `v1` to `v3` all go through that version's `FormatOf`, and so does the `format` op. 3.0's is shcl's own, which already skips raw bodies.
 	- Acceptance signoff: 20261016, JC left the wider read to judgement. It stays, since every version now gives the same answer for the same file.
 	- Closed: 20261016-112928
+
+- C: strings with lengths
+	- ID: 2026101513330047
+	- Type: Feature
+	- Status: Done
+	- Priority: Avg
+	- Opened: 20261015-133300
+	- Opened by: JC
+	- Parent ID: 2026101512024159
+	- Note: shcl strings aren't NUL-terminated and can hold a NUL. Cobblevale garbled non-ASCII text, and Folderkite cut a save short at a NUL.
+	- Progress log:
+		- 20261015: Every string C hands back has its length and a NUL after it, so it can go straight to a C call, and the length keeps any NUL inside. Values and text going in take a length. Paths and file names are plain C strings.
+	- Swept: `shclw.h` has no call that hands back or takes a value without its length. Diagnostics, array items, and fallbacks have one too.
+	- Branch: c-core
+	- Commit: 22da342
+	- Test case: `test_nul` and the fallback lines in `test_fallbacks`, in `source/c/tests/api_test.c`. A value holding a NUL, and text and a save holding one, keep every byte. With copies cut at the first NUL, 3 checks failed.
+	- Acceptance signoff: 20261016, JC. Strings come back with their length and a NUL after it.
+	- Closed: 20261016-123500
 
 - Tests for upgrade and save failures
 	- ID: 2026101512024169

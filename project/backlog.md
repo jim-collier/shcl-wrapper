@@ -308,6 +308,34 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Swept: every new read in `shclw3.c` gives shcl's read memory back. The setter status map has every `shcl_set_status`, as Go's has. `run.c`'s float prints and `shclw_put_float32` share the one digits helper.
 	- Acceptance signoff: Waiting. The put calls and where the compaction happens were choices.
 
+- C: format, upgrade, and the info block on shcl 3.0
+	- ID: 2026101516111033
+	- Type: Feature
+	- Status: Waiting on signoff
+	- Priority: High
+	- Opened: 20261015-161111
+	- Opened by: JC
+	- Parent ID: 2026101512024159
+	- Prereq IDs: 2026101516110996
+	- Requirements:
+		- FormatOf, Upgrade, UpgradeFile, InfoBlock, StampFormat, Rewrites, and Check.
+		- The upgrade refuses a 2.x file that shcl 2.0 has errors on, as in Go and Rust, if 2.0 can be built in beside 3.0.
+	- Progress log:
+		- 20261015: `shclw.h` has `shclw_format_of`, `shclw_upgrade`, `shclw_upgrade_file`, `shclw_info_block`, `shclw_stamp_format`, `shclw_rewrites`, `shclw_check`, and `shclw_drop_declared`. The info block code is a port of Go's, in `info.c`, for every version. The checked replace is in `shclw.c`.
+		- All 33 shared cases run whole in C on 3.0 now. `run.c` has no "not yet" ops left, so that went, and `c_cases.py` compares every op.
+		- shcl 2.0 and 3.0 fit in one program with no edit to shcl. Every external symbol 2.0 has is a public `shcl_` call, so 2.0's `shcl.h` goes in 2 files of its own with each call renamed by a macro. A build check fails on any name left as it was. Nothing here waits on a person.
+	- Decisions:
+		- The upgrade's result is one block, `shclw_upgraded`, freed with `free()`, and 2.0's errors on a refused file are in it. Go and Rust put them on the error, but C's error is a fixed struct nobody frees.
+		- `shclw_drop_declared(schema, d)` drops hints from d's own diagnostics. shcl's C binding has no form that takes a list.
+		- A 3.0 C program needs 2.0's `shcl.h` to build, pinned by commit like 3.0's. 2.0 ends the program when memory runs out.
+	- Note: Go's `FormatIn`, which 1.2 and 2.0 use, isn't in C yet. That's for 2026101516111070, with the rest of those 2 versions.
+	- Verified: the gate passes, with all 33 shared cases whole and 345 ops compared in C. Each new check failed with its rule taken out: the 2.0 refusal, the `From` fix, the restore after a failed replace, the hint drop, the raw body check in the info block, a second read of the file during the upgrade, and a 2.0 name left unrenamed.
+	- Branch: c-format
+	- Commit: c71ca83
+	- Test case: `test_replace_read`, `test_upgrade`, `test_upgrade_file`, `test_upgrade_raced`, `test_info`, `test_rewrites`, and `test_check` in `source/c/tests/api_test.c`, the Makefile's `names` check, and the shared cases through `cicd/c_cases.py`.
+	- Swept: every op in design.md's ops table has a C function in `run.c`. Every C call that hands back an upgrade sets it on a failure too, as Go does. design.md's C notes on layout, sharing the code, and the ops runner.
+	- Acceptance signoff: Waiting. New API, and the 3 decisions above are C's own.
+
 - PutSyntax doesn't read its value back
 	- ID: 2026101513330007
 	- Type: Bug
@@ -541,34 +569,6 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- shcl's C header has no version macro before 3.0, so 1.2 and 2.0 are told apart by what they declare.
 	- Progress log:
 		- 20261015: split into 5 parts, each its own item below. This closes when they do.
-
-- C: format, upgrade, and the info block on shcl 3.0
-	- ID: 2026101516111033
-	- Type: Feature
-	- Status: Waiting on signoff
-	- Priority: High
-	- Opened: 20261015-161111
-	- Opened by: JC
-	- Parent ID: 2026101512024159
-	- Prereq IDs: 2026101516110996
-	- Requirements:
-		- FormatOf, Upgrade, UpgradeFile, InfoBlock, StampFormat, Rewrites, and Check.
-		- The upgrade refuses a 2.x file that shcl 2.0 has errors on, as in Go and Rust, if 2.0 can be built in beside 3.0.
-	- Progress log:
-		- 20261015: `shclw.h` has `shclw_format_of`, `shclw_upgrade`, `shclw_upgrade_file`, `shclw_info_block`, `shclw_stamp_format`, `shclw_rewrites`, `shclw_check`, and `shclw_drop_declared`. The info block code is a port of Go's, in `info.c`, for every version. The checked replace is in `shclw.c`.
-		- All 33 shared cases run whole in C on 3.0 now. `run.c` has no "not yet" ops left, so that went, and `c_cases.py` compares every op.
-		- shcl 2.0 and 3.0 fit in one program with no edit to shcl. Every external symbol 2.0 has is a public `shcl_` call, so 2.0's `shcl.h` goes in 2 files of its own with each call renamed by a macro. A build check fails on any name left as it was. Nothing here waits on a person.
-	- Decisions:
-		- The upgrade's result is one block, `shclw_upgraded`, freed with `free()`, and 2.0's errors on a refused file are in it. Go and Rust put them on the error, but C's error is a fixed struct nobody frees.
-		- `shclw_drop_declared(schema, d)` drops hints from d's own diagnostics. shcl's C binding has no form that takes a list.
-		- A 3.0 C program needs 2.0's `shcl.h` to build, pinned by commit like 3.0's. 2.0 ends the program when memory runs out.
-	- Note: Go's `FormatIn`, which 1.2 and 2.0 use, isn't in C yet. That's for 2026101516111070, with the rest of those 2 versions.
-	- Verified: the gate passes, with all 33 shared cases whole and 345 ops compared in C. Each new check failed with its rule taken out: the 2.0 refusal, the `From` fix, the restore after a failed replace, the hint drop, the raw body check in the info block, a second read of the file during the upgrade, and a 2.0 name left unrenamed.
-	- Branch: c-format
-	- Commit: c71ca83
-	- Test case: `test_replace_read`, `test_upgrade`, `test_upgrade_file`, `test_upgrade_raced`, `test_info`, `test_rewrites`, and `test_check` in `source/c/tests/api_test.c`, the Makefile's `names` check, and the shared cases through `cicd/c_cases.py`.
-	- Swept: every op in design.md's ops table has a C function in `run.c`. Every C call that hands back an upgrade sets it on a failure too, as Go does. design.md's C notes on layout, sharing the code, and the ops runner.
-	- Acceptance signoff: Waiting. New API, and the 3 decisions above are C's own.
 
 - C: shcl 1.2 and 2.0
 	- ID: 2026101516111070

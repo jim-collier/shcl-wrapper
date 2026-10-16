@@ -462,6 +462,40 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Swept: `Each` in Go `shclw1` to `shclw3` and Rust `v1` to `v3`, and what uses it: `Names` on 1.2 and 2.0, `Lines`, `First`, `Last`, and the `each` and `eachget` ops.
 	- Acceptance signoff: Waiting. Expanding wildcards rather than refusing them was a choice.
 
+- Go and Rust print a float that's an exact tie at its shortest digits differently
+	- ID: 2026101517145204
+	- Type: Bug
+	- Status: Waiting on signoff
+	- Severity: Low
+	- Opened: 20261015-171452
+	- Opened by: JC
+	- Related IDs: 2026101516110996
+	- Steps to reproduce:
+		- `or float missing 2.98023223876953125e-08` in an ops script, or `1125899906842624.25`.
+	- Incorrect behavior: Go prints `2.9802322387695312e-8` and `1125899906842624.2`. Rust prints `...313e-8` and `...624.3`. Each reads back as the same float, and so do the negatives.
+	- Expected behavior: The same text in every language, as design.md's ops section says.
+	- Reproduced: 20261015 on 3.0. Over every double power of 2 and the next float up, these 4 were the only differences.
+	- Possible cause: Go's Dragonbox rounds an exact tie to even, except up at most powers of 2. Rust's formatter rounds it up.
+	- Note: Seen in what the ops print. What a put writes comes from shcl, and wasn't checked.
+	- Actual cause:
+		- Rust's `{:e}` rounds an exact tie at the shortest length away from zero. Go rounds it to even, except at a float32 power of 2, where it rounds up.
+		- The same tie made Rust's `f32` put write another float64 than Go's. About 8.4 million float32 values went in differently, counting both signs. 0.00244140625 went in as 0.0024414063 in Rust and 0.0024414062 in Go.
+	- Decisions:
+		- Go's rule, since only Rust had to change: no want file and no C change. It's the rule shcl 3.0's own Rust `format_float` uses.
+		- Rust and C copy Go's round-up at a float32 power of 2 too, so an `f32` put goes in the same everywhere.
+	- Actual fix: Rust takes the even spelling of the same length when it reads back, in the ops prints and in `f32` puts.
+	- Note: Go's float32 round-up looks like a Go slip. Its float32 code checks for that tie at the float64 exponent, -77, where Dragonbox's own code uses -35 for a float32. It hits 2^-12 and its negative only. If Go fixes it, `TestPutFloat32` fails.
+	- Note: shcl friction, a rough edge. On 1.2 and 2.0, a put of 2^-25 writes `0.000000029802322387695313` from Rust and `0.000000029802322387695312` from Go. A put of 1125899906842624.25 writes `...624.3` and `...624.2`. Both read back as the same float. Expected: the same text, as 3.0's bindings already give. The wrapper doesn't even it out. It would have to write floats as text on 1.2 and 2.0 with its own read-back, for a difference no read can see.
+	- Verified:
+		- The gate and a 20 second fuzz, Go against Rust, with no difference.
+		- Go and Rust print the same text for 17 million doubles: every power of 2 and its neighbors, small mantissas times powers of 2, the neighbors of 2^52 and 2^53, and 3 million random ones. Rust before the fix differed on 42,452 of them.
+		- Every finite float32 goes in as the same float64 in Go and Rust. Before the fix it didn't.
+	- Branch: small-bugs
+	- Commit: f1ff7a9
+	- Test case: tests/cases/032-float-ties, Go `TestPutFloat32`, Rust `put_f32`. The case and `put_f32` failed in Rust before the fix, and pass after. C passes the case.
+	- Swept: every place Rust turns a float into text, `format_float` and `From<f32>`. Go's and C's already follow Go's rule. No other float-to-text site in the 3 wrappers.
+	- Acceptance signoff: Waiting. The tie rule was a pick, and so was copying Go's float32 round-up.
+
 - shcl 4 adapters
 	- ID: 2026101512024163
 	- Type: Feature
@@ -847,90 +881,6 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Parent ID: 2026101512024159
 	- Note: Cobblevale compiles shcl in one file with `SHCL_NO_FILE_IO`, since the file calls pull in `windows.h`, adn writes files itself. Write would need its own code for that build.
 
-- Upgrade says a file with no Format line is from 2 on 3.0
-	- ID: 2026101516183333
-	- Type: Bug
-	- Status: Done
-	- Severity: Low
-	- Opened: 20261015-161833
-	- Opened by: JC
-	- Steps to reproduce:
-		- On 3.0, run the `upgrade` op with `from` 0 on a file with no Format line that loads clean.
-	- Incorrect behavior: It reports `from 2 changed false`.
-	- Expected behavior: design.md says a file with no Format line is taken as current, so `from` should say 3.
-	- Note: shcl documents a fallback to 2 when no line names a format. Seen while fixing 2026101515553202, not yet reproduced on its own.
-	- Reproduced: 20261015 on 3.0 in Go and Rust. It says `from 2` with `from` 0, and with `from` 3 too. 1.2 and 2.0 say their own format.
-	- Actual cause:
-		- shcl's `Upgrade` gives 2 as the format of a file with no Format line, for the backup's name, even when it leaves the file as current. The 3.0 adapter passed that on as `From`.
-	- Actual fix: On 3.0, a file with no Format line that the upgrade leaves alone, without `from` 2, says `From` 3. The code was wrong, not design.md, which now says so outright. A file converted as 2.x still says 2.
-	- Note: The decisions on 2026101513330001, 2026101513330002, and 2026101513330005 don't move. Nothing written changes, since `From` names the backup only when the file changes.
-	- Verified: the gate and a 20 second fuzz, Go against Rust, with no difference.
-	- Branch: small-bugs
-	- Commit: f1ff7a9
-	- Test case: tests/cases/033-upgrade-no-format, and the 3.0 want of 028-format-raw, which had pinned `from 2`. Both failed before the fix in Go and Rust, and pass after.
-	- Swept: `Upgrade` in Go `shclw3` and Rust `v3`, which `UpgradeFile` goes through. 1.2 and 2.0 already say their own format. C has no upgrade yet.
-	- Acceptance signoff: Self-closed: reproduced, and its test failed before the fix and passes after.
-	- Closed: 20261015-175500
-
-- Go's Names drops a name that differs from another only past ASCII case
-	- ID: 2026101517145199
-	- Type: Bug
-	- Status: Done
-	- Severity: Low
-	- Opened: 20261015-171452
-	- Opened by: JC
-	- Related IDs: 2026101516110996
-	- Steps to reproduce:
-		- `names` with an empty path on a document with `"É": 1` and `"é": 2`.
-	- Incorrect behavior: Go lists `É` alone. Rust lists both, and shcl counts them as 2 keys.
-	- Expected behavior: Both, as Rust and C give them.
-	- Reproduced: 20261015, with the Go and Rust drivers on 1.2 and 3.0.
-	- Possible cause: `DedupeNames` folds with `strings.ToLower`, though its comment says ASCII case. Rust's `dedupe_names` uses `to_ascii_lowercase`.
-	- Actual cause:
-		- `DedupeNames` folded case with `strings.ToLower`, which folds past ASCII. `kids`, which numbers the paths a wildcard `Each` gives, did the same. So `É` and `é` were numbered as one name, and on 1.2 one of them came back empty.
-	- Actual fix: Go folds A to Z only in both places, as Rust and C do.
-	- Verified: the gate and a 20 second fuzz, Go against Rust, with no difference.
-	- Branch: small-bugs
-	- Commit: f1ff7a9
-	- Test case: tests/cases/031-names-case. It failed in Go before the fix on 1.2, 2.0, and 3.0, and passes after. Rust and C pass it.
-	- Swept: Go `DedupeNames` and `kids`. Rust's `dedupe_names` and `kids` and C's `shclw_i_dedupe_names` already fold ASCII only. No other case folding in the 3 wrappers.
-	- Acceptance signoff: Self-closed: reproduced, and its test failed before the fix and passes after.
-	- Closed: 20261015-175500
-
-- Go and Rust print a float that's an exact tie at its shortest digits differently
-	- ID: 2026101517145204
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Severity: Low
-	- Opened: 20261015-171452
-	- Opened by: JC
-	- Related IDs: 2026101516110996
-	- Steps to reproduce:
-		- `or float missing 2.98023223876953125e-08` in an ops script, or `1125899906842624.25`.
-	- Incorrect behavior: Go prints `2.9802322387695312e-8` and `1125899906842624.2`. Rust prints `...313e-8` and `...624.3`. Each reads back as the same float, and so do the negatives.
-	- Expected behavior: The same text in every language, as design.md's ops section says.
-	- Reproduced: 20261015 on 3.0. Over every double power of 2 and the next float up, these 4 were the only differences.
-	- Possible cause: Go's Dragonbox rounds an exact tie to even, except up at most powers of 2. Rust's formatter rounds it up.
-	- Note: Seen in what the ops print. What a put writes comes from shcl, and wasn't checked.
-	- Actual cause:
-		- Rust's `{:e}` rounds an exact tie at the shortest length away from zero. Go rounds it to even, except at a float32 power of 2, where it rounds up.
-		- The same tie made Rust's `f32` put write another float64 than Go's. About 8.4 million float32 values went in differently, counting both signs. 0.00244140625 went in as 0.0024414063 in Rust and 0.0024414062 in Go.
-	- Decisions:
-		- Go's rule, since only Rust had to change: no want file and no C change. It's the rule shcl 3.0's own Rust `format_float` uses.
-		- Rust and C copy Go's round-up at a float32 power of 2 too, so an `f32` put goes in the same everywhere.
-	- Actual fix: Rust takes the even spelling of the same length when it reads back, in the ops prints and in `f32` puts.
-	- Note: Go's float32 round-up looks like a Go slip. Its float32 code checks for that tie at the float64 exponent, -77, where Dragonbox's own code uses -35 for a float32. It hits 2^-12 and its negative only. If Go fixes it, `TestPutFloat32` fails.
-	- Note: shcl friction, a rough edge. On 1.2 and 2.0, a put of 2^-25 writes `0.000000029802322387695313` from Rust and `0.000000029802322387695312` from Go. A put of 1125899906842624.25 writes `...624.3` and `...624.2`. Both read back as the same float. Expected: the same text, as 3.0's bindings already give. The wrapper doesn't even it out. It would have to write floats as text on 1.2 and 2.0 with its own read-back, for a difference no read can see.
-	- Verified:
-		- The gate and a 20 second fuzz, Go against Rust, with no difference.
-		- Go and Rust print the same text for 17 million doubles: every power of 2 and its neighbors, small mantissas times powers of 2, the neighbors of 2^52 and 2^53, and 3 million random ones. Rust before the fix differed on 42,452 of them.
-		- Every finite float32 goes in as the same float64 in Go and Rust. Before the fix it didn't.
-	- Branch: small-bugs
-	- Commit: f1ff7a9
-	- Test case: tests/cases/032-float-ties, Go `TestPutFloat32`, Rust `put_f32`. The case and `put_f32` failed in Rust before the fix, and pass after. C passes the case.
-	- Swept: every place Rust turns a float into text, `format_float` and `From<f32>`. Go's and C's already follow Go's rule. No other float-to-text site in the 3 wrappers.
-	- Acceptance signoff: Waiting. The tie rule was a pick, and so was copying Go's float32 round-up.
-
 - Commit and publish from cicd
 	- ID: 2026101512024171
 	- Type: Task
@@ -1192,6 +1142,56 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Swept: Put, PutSyntax, Comment, and Remove in Go `shclw1` to `shclw3` and Rust `v1` to `v3`. 3.0 needs no change, since shcl 3.0 refuses these itself. Remove takes out every instance and counts them on every version, as design.md says, so it stays as is. A table written twice reads as one instance on every version, so a comment on it is fine.
 	- Acceptance signoff: Self-closed: matches what Put already does.
 	- Closed: 20261015-143031
+
+- Go's Names drops a name that differs from another only past ASCII case
+	- ID: 2026101517145199
+	- Type: Bug
+	- Status: Done
+	- Severity: Low
+	- Opened: 20261015-171452
+	- Opened by: JC
+	- Related IDs: 2026101516110996
+	- Steps to reproduce:
+		- `names` with an empty path on a document with `"É": 1` and `"é": 2`.
+	- Incorrect behavior: Go lists `É` alone. Rust lists both, and shcl counts them as 2 keys.
+	- Expected behavior: Both, as Rust and C give them.
+	- Reproduced: 20261015, with the Go and Rust drivers on 1.2 and 3.0.
+	- Possible cause: `DedupeNames` folds with `strings.ToLower`, though its comment says ASCII case. Rust's `dedupe_names` uses `to_ascii_lowercase`.
+	- Actual cause:
+		- `DedupeNames` folded case with `strings.ToLower`, which folds past ASCII. `kids`, which numbers the paths a wildcard `Each` gives, did the same. So `É` and `é` were numbered as one name, and on 1.2 one of them came back empty.
+	- Actual fix: Go folds A to Z only in both places, as Rust and C do.
+	- Verified: the gate and a 20 second fuzz, Go against Rust, with no difference.
+	- Branch: small-bugs
+	- Commit: f1ff7a9
+	- Test case: tests/cases/031-names-case. It failed in Go before the fix on 1.2, 2.0, and 3.0, and passes after. Rust and C pass it.
+	- Swept: Go `DedupeNames` and `kids`. Rust's `dedupe_names` and `kids` and C's `shclw_i_dedupe_names` already fold ASCII only. No other case folding in the 3 wrappers.
+	- Acceptance signoff: Self-closed: reproduced, and its test failed before the fix and passes after.
+	- Closed: 20261015-175500
+
+- Upgrade says a file with no Format line is from 2 on 3.0
+	- ID: 2026101516183333
+	- Type: Bug
+	- Status: Done
+	- Severity: Low
+	- Opened: 20261015-161833
+	- Opened by: JC
+	- Steps to reproduce:
+		- On 3.0, run the `upgrade` op with `from` 0 on a file with no Format line that loads clean.
+	- Incorrect behavior: It reports `from 2 changed false`.
+	- Expected behavior: design.md says a file with no Format line is taken as current, so `from` should say 3.
+	- Note: shcl documents a fallback to 2 when no line names a format. Seen while fixing 2026101515553202, not yet reproduced on its own.
+	- Reproduced: 20261015 on 3.0 in Go and Rust. It says `from 2` with `from` 0, and with `from` 3 too. 1.2 and 2.0 say their own format.
+	- Actual cause:
+		- shcl's `Upgrade` gives 2 as the format of a file with no Format line, for the backup's name, even when it leaves the file as current. The 3.0 adapter passed that on as `From`.
+	- Actual fix: On 3.0, a file with no Format line that the upgrade leaves alone, without `from` 2, says `From` 3. The code was wrong, not design.md, which now says so outright. A file converted as 2.x still says 2.
+	- Note: The decisions on 2026101513330001, 2026101513330002, and 2026101513330005 don't move. Nothing written changes, since `From` names the backup only when the file changes.
+	- Verified: the gate and a 20 second fuzz, Go against Rust, with no difference.
+	- Branch: small-bugs
+	- Commit: f1ff7a9
+	- Test case: tests/cases/033-upgrade-no-format, and the 3.0 want of 028-format-raw, which had pinned `from 2`. Both failed before the fix in Go and Rust, and pass after.
+	- Swept: `Upgrade` in Go `shclw3` and Rust `v3`, which `UpgradeFile` goes through. 1.2 and 2.0 already say their own format. C has no upgrade yet.
+	- Acceptance signoff: Self-closed: reproduced, and its test failed before the fix and passes after.
+	- Closed: 20261015-175500
 
 - The Rust shared-case test leaves its scratch folders behind
 	- ID: 2026101514214605

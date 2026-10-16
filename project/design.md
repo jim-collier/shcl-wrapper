@@ -186,6 +186,7 @@ Go names are listed. Rust uses the same words in snake case, and `ShclDoc` has t
 | `d.Remove(path)`          | Takes out a path and everything under it, and says how many instances went. That's every instance, and also the ones under any step that repeats.
 
 - A Go `float32` or Rust `f32` is written as its own shortest digits, so 0.9 is written `0.9` and not as the float64 it widens to. C has `shclw_put_float32` for a `float`.
+	- A tie between 2 spellings goes to the even one, except at a float32 power of 2, where Go rounds up. Rust and C give the same digits as Go.
 
 - Infinity and NaN are refused with `BadValue`, and nothing changes, since no read would take them back.
 
@@ -197,7 +198,7 @@ Go names are listed. Rust uses the same words in snake case, and `ShclDoc` has t
 	- 1.2 and 2.0 don't read the line, so the wrapper reads it as 3.0 does: indented or not, digits only. One in a raw body is the body's, and doesn't count. With several, the first naming the bound format or newer wins, else the highest.
 
 - `Upgrade(text, from)` and `UpgradeFile(path, from)` move a file to the bound shcl's format.
-	- With `from` 0 the Format line decides, and a file with none is taken as current.
+	- With `from` 0 the Format line decides, and a file with none is taken as current. When it's left as it is, `From` is the bound format.
 	- `from` 2 says the file is known to be from shcl 2.x or older. The file can't say so itself, so only the program can.
 	- `UpgradeFile` copies the original beside it first, and `Backup` names the copy.
 	- `UpgradeFile` reads the file once. The 2.0 check, the conversion, and the backup all use that text.
@@ -250,7 +251,7 @@ Each row has a test, either a shared case or an API test.
 | Behavior                                 | shcl did                                                           | The wrapper does
 | :---                                     | :---                                                               | :---
 | `Names` on a path with several instances | 1.2 and 2.0 give nothing. 3.0 lists every instance's children.     | Lists every instance's children, everywhere.
-| `Names` with a name given twice          | Lists it once per line.                                            | Lists it once.
+| `Names` with a name given twice          | Lists it once per line.                                            | Lists it once. Names match without ASCII case only, as in shcl, so `É` and `é` are 2.
 | An edit on a path with several instances | 1.2 and 2.0 edit the first one and say ok. 3.0 refuses.            | `Put`, `PutSyntax`, and `Comment` refuse with `BadPath`, everywhere, and change nothing. That's several at any step, like `tv.g` with `tv` twice, unless a selector picks one there.
 | A put that doesn't read back the same    | Says ok.                                                           | Reads every put back. A mismatch is `NoReadBack`, with the edit left in place.
 | `PutSyntax` text with a trailing comment | Drops the comment and says ok.                                     | `NoReadBack`, with the edit left in place.
@@ -303,7 +304,7 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 
 - Every op is echoed first, after a `>` and a space, so an output file reads as a transcript.
 
-- Floats print the same in every language: the shortest digits that read back exactly, positional from 1e-5 to 1e17, otherwise with an exponent.
+- Floats print the same in every language: the shortest digits that read back exactly, positional from 1e-5 to 1e17, otherwise with an exponent. When 2 spellings of that length are equally close, the even one wins, as in Go.
 
 - `check` and `write` only work in the folder the driver is given, and refuse a name with a path in it.
 

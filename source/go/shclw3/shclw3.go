@@ -142,6 +142,10 @@ func Upgrade(text string, from int) (Upgraded, error) {
 	fromV2 := from > 0 && from < FormatMajor
 	u := shcl.Upgrade(text, fromV2)
 	out := upgraded(u)
+	// shcl says 2 for a file with no Format line, even one it leaves alone.
+	if u.Current && !fromV2 && FormatOf(text) == 0 {
+		out.From = FormatMajor
+	}
 	if u.Ambiguous > 0 {
 		return out, &shclw.Error{Kind: shclw.ErrAmbiguous, Msg: fmt.Sprintf("%d lines read two ways", u.Ambiguous)}
 	}

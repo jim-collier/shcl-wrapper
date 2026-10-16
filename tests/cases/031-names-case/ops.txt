@@ -1,0 +1,4 @@
+# Names are matched without ASCII case only, so É and é are 2 names.
+names
+count	"é"
+each	*

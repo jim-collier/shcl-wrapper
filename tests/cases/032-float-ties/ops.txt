@@ -1,0 +1,5 @@
+# Exact ties at the shortest length go to the even digit.
+or	float	missing	2.98023223876953125e-08
+or	float	missing	-2.98023223876953125e-08
+or	float	missing	1125899906842624.25
+or	float	missing	-1125899906842624.25

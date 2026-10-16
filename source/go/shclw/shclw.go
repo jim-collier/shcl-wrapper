@@ -429,7 +429,7 @@ func DedupeNames(names []string) []string {
 	out := make([]string, 0, len(names))
 	seen := make(map[string]bool, len(names))
 	for _, n := range names {
-		k := strings.ToLower(n)
+		k := asciiLower(n)
 		if seen[k] {
 			continue
 		}
@@ -437,6 +437,18 @@ func DedupeNames(names []string) []string {
 		out = append(out, n)
 	}
 	return out
+}
+
+// asciiLower folds only A to Z. strings.ToLower would also fold É into é,
+// which shcl holds as 2 names, and turn bad UTF-8 into U+FFFD.
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
 }
 
 // InFileOrder is the instances of path sorted by line. Each goes in tree
@@ -577,12 +589,12 @@ func kids(d Doc, children func(string) []string, base string) []string {
 	names := children(base)
 	total := make(map[string]int, len(names))
 	for _, n := range names {
-		total[strings.ToLower(n)]++
+		total[asciiLower(n)]++
 	}
 	at := make(map[string]int, len(names))
 	out := make([]string, 0, len(names))
 	for _, n := range names {
-		p, k := d.Child(base, n), strings.ToLower(n)
+		p, k := d.Child(base, n), asciiLower(n)
 		if total[k] > 1 {
 			p += "[#" + strconv.Itoa(at[k]) + "]"
 			at[k]++

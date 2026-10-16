@@ -126,7 +126,13 @@ pub fn upgrade(text: &str, from: u32) -> Result<Upgraded, Error> {
 	if let Some(e) = old_errors(text, from_v2, &u) {
 		return Err(e);
 	}
-	Ok(upgraded(u))
+	// shcl says 2 for a file with no Format line, even one it leaves alone.
+	let taken_as_current = u.current && !from_v2 && format_of(text) == 0;
+	let mut out = upgraded(u);
+	if taken_as_current {
+		out.from = FORMAT_MAJOR;
+	}
+	Ok(out)
 }
 
 /// `upgrade` on a file. When it changes the file it first copies the

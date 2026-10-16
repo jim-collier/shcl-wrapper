@@ -5,12 +5,13 @@
 //
 // Documents keep their lines as typed, so shclw_text and shclw_write give back
 // what was read plus the edits, where 3.0 can manage that, and the canonical
-// form where it can't. shclw_write refuses with SHCLW_ERR_REFUSED rather than
-// drop a line.
+// form where it can't. shclw_rewrites says which. shclw_write refuses with
+// SHCLW_ERR_REFUSED rather than drop a line.
 //
 // Every read copies its answer out and then gives back shcl's read memory, so
 // a program that reads in a loop doesn't grow (2026101513330046).
 
+#include "shclw3_v2.h"
 #include "shclw_adapter.h"
 
 #if SHCLW_SHCL != 3
@@ -25,6 +26,8 @@
 
 struct shclw_doc {
 	shcl_doc *d;
+	shclw_i_info info;
+	bool stamp;
 };
 
 static shclw_status status_of(shcl_status s) {
@@ -48,9 +51,8 @@ static shcl_strictness level_of(shclw_strictness s) {
 	return SHCL_STANDARD;
 }
 
-// The format a file's Format line names, or 0.
-static int64_t format_of(const char *text, size_t len) {
-	shcl_read_i64 r = shcl_read_format_version(text, len);
+int64_t shclw_format_of(const char *text, size_t len) {
+	shcl_read_i64 r = shcl_read_format_version(text ? text : "", text ? len : 0);
 	return r.status == SHCL_GOOD ? r.value : 0;
 }
 
@@ -76,6 +78,8 @@ shclw_kind shclw_parse_with(const char *text, size_t len, shclw_strictness level
 		return shclw_i_fail(err, SHCLW_ERR_NO_MEMORY, NULL, NULL, 0);
 	}
 	d->d = shcl_parse_keep_lines(text ? text : "", text ? len : 0, level_of(level));
+	d->info = SHCLW_I_INFO_AS_IS;
+	d->stamp = false;
 	if (!d->d) {
 		free(d);
 		return shclw_i_fail(err, SHCLW_ERR_NO_MEMORY, NULL, NULL, 0);
@@ -99,7 +103,7 @@ shclw_kind shclw_open_with(const char *path, shclw_strictness level, shclw_doc *
 	size_t len = 0;
 	shclw_kind kind = shclw_read_text(path, &text, &len, err);
 	if (kind == SHCLW_OK) {
-		int64_t format = format_of(text, len);
+		int64_t format = shclw_format_of(text, len);
 		if (format > SHCLW_FORMAT_MAJOR) {
 			kind = too_new(err, path, format);
 		}
@@ -131,20 +135,112 @@ void shclw_free(shclw_doc *d) {
 
 shcl_doc *shclw_inner(shclw_doc *d) { return d->d; }
 
-char *shclw_text(shclw_doc *d, size_t *len) {
-	// Without the lines kept, this is the canonical form.
-	shcl_str s = shcl_to_text_keep_lines(d->d, NULL);
-	char *out = shclw_i_dup(s.p, s.n, len);
-	shcl_reads_release(d->d);
+// Every field's path and value and the load's error codes, for
+// shclw_i_finish_info to tell a comment from a raw body's line.
+static char *values(const char *text, size_t len, size_t *n) {
+	*n = 0;
+	shcl_doc *d = shcl_parse(text, len);
+	if (!d) {
+		return NULL;
+	}
+	shcl_field *fields = NULL;
+	size_t count = shcl_fields(d, &fields);
+	size_t total = 0;
+	bool big = false;
+	for (size_t i = 0; i < count && !big; i++) {
+		size_t more = fields[i].path.n + fields[i].value.n + 2;
+		big = fields[i].path.n > SIZE_MAX / 8 || fields[i].value.n > SIZE_MAX / 8 || more > SIZE_MAX / 4 - total;
+		total += more;
+	}
+	size_t ndiags = shcl_diag_count(d);
+	for (size_t i = 0; i < ndiags && !big; i++) {
+		size_t more = strlen(shcl_diag_code(d, i)) + 1;
+		big = more > SIZE_MAX / 4 - total;
+		total += more;
+	}
+	char *out = big ? NULL : (char *)malloc(total + 1);
+	if (out) {
+		char *at = out;
+		for (size_t i = 0; i < count; i++) {
+			if (fields[i].path.n) {
+				memcpy(at, fields[i].path.p, fields[i].path.n);
+			}
+			at += fields[i].path.n;
+			*at++ = '\0';
+			if (fields[i].value.n) {
+				memcpy(at, fields[i].value.p, fields[i].value.n);
+			}
+			at += fields[i].value.n;
+			*at++ = '\1';
+		}
+		for (size_t i = 0; i < ndiags; i++) {
+			if (shcl_diag_severity(d, i) == SHCL_SEV_ERROR) {
+				const char *code = shcl_diag_code(d, i);
+				size_t code_len = strlen(code);
+				memcpy(at, code, code_len);
+				at += code_len;
+				*at++ = '\2';
+			}
+		}
+		*n = (size_t)(at - out);
+	}
+	shcl_free(d);
 	return out;
 }
 
-char *shclw_canonical(shclw_doc *d, size_t *len) {
-	shcl_str s = shcl_to_canonical(d->d);
-	char *out = shclw_i_dup(s.p, s.n, len);
+static const shclw_i_info_edit info_edit = {SHCL_GEN_BANNER, SHCL_FORMAT_MAJOR, values};
+
+// s with the info block and the Format line as asked, or s as it is when an
+// edit since made them impossible; shclw_write says why.
+static char *finish(shclw_doc *d, shcl_str s, size_t *len) {
+	char *out = NULL;
+	size_t n = 0;
+	shclw_kind k = shclw_i_finish_info(s.p ? s.p : "", s.n, d->info, d->stamp, &info_edit, NULL, &out, &n, NULL);
+	if (k != SHCLW_OK && k != SHCLW_ERR_NO_MEMORY) {
+		out = shclw_i_dup(s.p, s.n, &n);
+	}
 	shcl_reads_release(d->d);
+	if (len) {
+		*len = out ? n : 0;
+	}
 	return out;
 }
+
+char *shclw_text(shclw_doc *d, size_t *len) {
+	// Without the lines kept, this is the canonical form.
+	return finish(d, shcl_to_text_keep_lines(d->d, NULL), len);
+}
+
+char *shclw_canonical(shclw_doc *d, size_t *len) { return finish(d, shcl_to_canonical(d->d), len); }
+
+bool shclw_rewrites(shclw_doc *d) {
+	int kept = 0;
+	(void)shcl_to_text_keep_lines(d->d, &kept);
+	shcl_reads_release(d->d);
+	return !kept;
+}
+
+// What the save would write with info and stamp, thrown away: InfoBlock and
+// StampFormat refuse what it refuses.
+static shclw_kind try_info(shclw_doc *d, shclw_i_info info, bool stamp, shclw_error *err) {
+	shcl_str s = shcl_to_text_keep_lines(d->d, NULL);
+	char *out = NULL;
+	size_t n = 0;
+	shclw_kind k = shclw_i_finish_info(s.p ? s.p : "", s.n, info, stamp, &info_edit, NULL, &out, &n, err);
+	free(out);
+	shcl_reads_release(d->d);
+	if (k == SHCLW_OK) {
+		d->info = info;
+		d->stamp = stamp;
+	}
+	return k;
+}
+
+shclw_kind shclw_info_block(shclw_doc *d, bool on, shclw_error *err) {
+	return try_info(d, on ? SHCLW_I_INFO_ON : SHCLW_I_INFO_OFF, d->stamp, err);
+}
+
+shclw_kind shclw_stamp_format(shclw_doc *d, shclw_error *err) { return try_info(d, d->info, true, err); }
 
 shclw_kind shclw_write(shclw_doc *d, const char *path, shclw_error *err) {
 	int kept = 0;
@@ -156,11 +252,18 @@ shclw_kind shclw_write(shclw_doc *d, const char *path, shclw_error *err) {
 		(void)snprintf(why, sizeof why, "%zu lines would be lost", lost);
 		return shclw_i_fail(err, SHCLW_ERR_REFUSED, path, why, 0);
 	}
+	char *text = NULL;
+	size_t len = 0;
+	shclw_kind k = shclw_i_finish_info(s.p ? s.p : "", s.n, d->info, d->stamp, &info_edit, path, &text, &len, err);
+	shcl_reads_release(d->d);
+	if (k != SHCLW_OK) {
+		return k;
+	}
 	shcl_write_status why = SHCL_WRITE_OK;
 	errno = 0;
-	int wrote = shcl_write_file_atomic(path, s.p, s.n, &why);
+	int wrote = shcl_write_file_atomic(path, text, len, &why);
 	int e = errno;
-	shcl_reads_release(d->d);
+	free(text);
 	if (wrote) {
 		// A save is where a program is done with a round of edits, and what
 		// they replaced stays in shcl's write memory until this
@@ -172,48 +275,59 @@ shclw_kind shclw_write(shclw_doc *d, const char *path, shclw_error *err) {
 	return shclw_i_fail(err, kind, path, shcl_write_status_name(why), e);
 }
 
+static shclw_diag diag_of(size_t line, shcl_severity sev, const char *code, shcl_str msg) {
+	shclw_diag g = {
+		line, sev == SHCL_SEV_ERROR ? SHCLW_SEV_ERROR : SHCLW_SEV_HINT, {code, strlen(code)}, {msg.p, msg.n}};
+	return g;
+}
+
 shclw_diag *shclw_diags(shclw_doc *d, size_t *n) {
 	*n = 0;
 	size_t count = shcl_diag_count(d->d);
-	if (count > (SIZE_MAX / 2) / sizeof(shclw_diag)) {
+	shclw_diag *views =
+		count < SIZE_MAX / sizeof(shclw_diag) ? (shclw_diag *)shclw_i_alloc(count * sizeof(shclw_diag)) : NULL;
+	if (!views) {
 		return NULL;
 	}
-	size_t bytes = count * sizeof(shclw_diag);
 	for (size_t i = 0; i < count; i++) {
-		size_t more = strlen(shcl_diag_code(d->d, i)) + shcl_diag_message(d->d, i).n + 2;
-		if (more >= SIZE_MAX / 2 - bytes) {
-			return NULL;
-		}
-		bytes += more;
+		views[i] = diag_of(shcl_diag_line(d->d, i), shcl_diag_severity(d->d, i), shcl_diag_code(d->d, i),
+		                   shcl_diag_message(d->d, i));
 	}
-	shclw_diag *out = (shclw_diag *)shclw_i_alloc(bytes);
-	if (!out) {
-		return NULL;
-	}
-	char *text = (char *)(out + count);
-	for (size_t i = 0; i < count; i++) {
-		const char *code = shcl_diag_code(d->d, i);
-		size_t code_len = strlen(code);
-		shcl_str msg = shcl_diag_message(d->d, i);
-		out[i].line = shcl_diag_line(d->d, i);
-		out[i].severity = shcl_diag_severity(d->d, i) == SHCL_SEV_ERROR ? SHCLW_SEV_ERROR : SHCLW_SEV_HINT;
-		memcpy(text, code, code_len + 1);
-		out[i].code.p = text;
-		out[i].code.n = code_len;
-		text += code_len + 1;
-		if (msg.n) {
-			memcpy(text, msg.p, msg.n);
-		}
-		text[msg.n] = '\0';
-		out[i].message.p = text;
-		out[i].message.n = msg.n;
-		text += msg.n + 1;
-	}
-	*n = count;
+	shclw_diag *out = shclw_i_copy_diags(views, count, n);
+	free(views);
 	return out;
 }
 
 size_t shclw_errors(shclw_doc *d) { return shcl_error_count(d->d); }
+
+shclw_diag *shclw_check(shclw_doc *d, shclw_doc *schema, size_t *n) {
+	*n = 0;
+	shcl_validation *v = shcl_validate(d->d, schema->d);
+	if (!v) {
+		return NULL;
+	}
+	size_t count = shcl_validation_count(v);
+	shclw_diag *views =
+		count < SIZE_MAX / sizeof(shclw_diag) ? (shclw_diag *)shclw_i_alloc(count * sizeof(shclw_diag)) : NULL;
+	shclw_diag *out = NULL;
+	if (views) {
+		for (size_t i = 0; i < count; i++) {
+			views[i] = diag_of(shcl_validation_line(v, i), shcl_validation_severity(v, i), shcl_validation_code(v, i),
+			                   shcl_validation_message(v, i));
+		}
+		out = shclw_i_copy_diags(views, count, n);
+		free(views);
+	}
+	shcl_validation_free(v);
+	shcl_reads_release(d->d);
+	shcl_reads_release(schema->d);
+	return out;
+}
+
+void shclw_drop_declared(shclw_doc *schema, shclw_doc *d) {
+	shcl_suppress_declared_repeats(schema->d, d->d);
+	shcl_suppress_declared_reopens(schema->d, d->d);
+}
 
 int64_t shclw_int(shclw_doc *d, const char *path, int64_t fallback) {
 	int64_t v = shcl_get_int_or(d->d, path, strlen(path), fallback);
@@ -551,3 +665,227 @@ shclw_kind shclw_comment(shclw_doc *d, const char *path, const char *text, size_
 }
 
 size_t shclw_remove(shclw_doc *d, const char *path) { return shcl_remove(d->d, path, strlen(path)); }
+
+// shcl 2.0's errors, copied out of its document as they come.
+typedef struct {
+	shclw_diag *v;
+	size_t n, cap;
+	bool oom;
+} old_list;
+
+static void keep_old(void *ctx, size_t line, const char *code, const char *msg, size_t msg_len) {
+	old_list *l = (old_list *)ctx;
+	if (l->oom) {
+		return;
+	}
+	if (l->n == l->cap) {
+		size_t cap = l->cap ? l->cap * 2 : 8;
+		shclw_diag *grown =
+			cap < SIZE_MAX / sizeof(shclw_diag) ? (shclw_diag *)realloc(l->v, cap * sizeof(shclw_diag)) : NULL;
+		if (!grown) {
+			l->oom = true;
+			return;
+		}
+		l->v = grown;
+		l->cap = cap;
+	}
+	size_t code_len = strlen(code);
+	char *c = shclw_i_dup(code, code_len, NULL);
+	char *m = shclw_i_dup(msg, msg_len, NULL);
+	if (!c || !m) {
+		free(c);
+		free(m);
+		l->oom = true;
+		return;
+	}
+	shclw_diag g = {line, SHCLW_SEV_ERROR, {c, code_len}, {m, msg_len}};
+	l->v[l->n++] = g;
+}
+
+static void free_old(old_list *l) {
+	for (size_t i = 0; i < l->n; i++) {
+		free((void *)l->v[i].code.p);
+		free((void *)l->v[i].message.p);
+	}
+	free(l->v);
+}
+
+static int by_size(const void *a, const void *b) {
+	size_t x = *(const size_t *)a, y = *(const size_t *)b;
+	return x < y ? -1 : x > y;
+}
+
+// How many lines the errors are on.
+static size_t lines_in(const old_list *l) {
+	size_t *lines = (size_t *)shclw_i_alloc(l->n * sizeof(size_t));
+	if (!lines) {
+		return l->n;
+	}
+	for (size_t i = 0; i < l->n; i++) {
+		lines[i] = l->v[i].line;
+	}
+	qsort(lines, l->n, sizeof(size_t), by_size);
+	size_t count = 0;
+	for (size_t i = 0; i < l->n; i++) {
+		count += i == 0 || lines[i] != lines[i - 1];
+	}
+	free(lines);
+	return count;
+}
+
+// Go's Upgrade, with path for the error when a file is behind it.
+static shclw_kind upgrade(const char *text, size_t len, int64_t from, const char *path, shclw_upgraded **out,
+                          shclw_error *err) {
+	*out = NULL;
+	if (!text) {
+		text = "";
+		len = 0;
+	}
+	int64_t named = shclw_format_of(text, len);
+	int64_t f = named > from ? named : from;
+	if (f > SHCLW_FORMAT_MAJOR) {
+		*out = shclw_i_upgraded(text, len, f, false, 0, NULL, NULL, 0);
+		return *out ? too_new(err, path, f) : shclw_i_fail(err, SHCLW_ERR_NO_MEMORY, path, NULL, 0);
+	}
+	bool from_v2 = from > 0 && from < SHCLW_FORMAT_MAJOR;
+	shcl_upgraded u = shcl_upgrade(text, len, from_v2 ? 1 : 0);
+	if (!u.text) {
+		shcl_upgraded_free(&u);
+		return shclw_i_fail(err, SHCLW_ERR_NO_MEMORY, path, NULL, 0);
+	}
+	int64_t was = u.format;
+	// shcl says 2 for a file with no Format line, even one it leaves alone.
+	if (u.current && !from_v2 && named == 0) {
+		was = SHCLW_FORMAT_MAJOR;
+	}
+	shclw_kind k = SHCLW_OK;
+	if (u.ambiguous > 0) {
+		*out = shclw_i_upgraded(u.text, u.len, was, !u.current, u.lost, NULL, NULL, 0);
+		char why[64];
+		(void)snprintf(why, sizeof why, "%zu lines read two ways", u.ambiguous);
+		k = shclw_i_fail(err, SHCLW_ERR_AMBIGUOUS, path, why, 0);
+	} else if (u.current && !(from_v2 && u.format < SHCLW_FORMAT_MAJOR)) {
+		*out = shclw_i_upgraded(u.text, u.len, was, false, u.lost, NULL, NULL, 0);
+	} else {
+		// A file taken as 2.x that 2.0 reports errors on. The old program
+		// read those lines as it repaired them, or not at all, and an open raw
+		// block took the rest of the file. The upgrade would turn that into a
+		// clean file that means something else (design.md, Format and upgrade).
+		old_list l = {NULL, 0, 0, false};
+		(void)shclw_i_v2_errors(text, len, keep_old, &l);
+		if (l.oom) {
+			k = shclw_i_fail(err, SHCLW_ERR_NO_MEMORY, path, NULL, 0);
+		} else if (l.n) {
+			*out = shclw_i_upgraded(text, len, u.format, false, 0, NULL, l.v, l.n);
+			char why[96];
+			(void)snprintf(why, sizeof why, "shcl 2.0 reports errors on %zu lines; fix them and upgrade again",
+			               lines_in(&l));
+			k = shclw_i_fail(err, SHCLW_ERR_REFUSED, path, why, 0);
+		} else {
+			*out = shclw_i_upgraded(u.text, u.len, was, !u.current, u.lost, NULL, NULL, 0);
+		}
+		free_old(&l);
+	}
+	shcl_upgraded_free(&u);
+	if (!*out) {
+		return shclw_i_fail(err, SHCLW_ERR_NO_MEMORY, path, NULL, 0);
+	}
+	return k == SHCLW_OK ? shclw_i_ok(err) : k;
+}
+
+shclw_kind shclw_upgrade(const char *text, size_t len, int64_t from, shclw_upgraded **out, shclw_error *err) {
+	return upgrade(text, len, from, NULL, out, err);
+}
+
+typedef struct {
+	const char *path;
+	const char *text;
+	size_t len;
+	int64_t from;
+} replacing;
+
+static shclw_kind keep_original(void *ctx, char **name, shclw_error *err) {
+	const replacing *r = (const replacing *)ctx;
+	char *message = NULL;
+	shcl_write_status why = SHCL_WRITE_OK;
+	errno = 0;
+	shcl_upgrade_error ue = shcl_write_backup(r->path, r->text, r->len, (uint32_t)r->from, name, &message, &why);
+	int e = errno;
+	if (ue == SHCL_UPGRADE_OK) {
+		free(message);
+		return shclw_i_ok(err);
+	}
+	shclw_kind k = shclw_i_fail(err, ue == SHCL_UPGRADE_BACKUP_TAKEN ? SHCLW_ERR_BACKUP_TAKEN : SHCLW_ERR_IO, r->path,
+	                            message ? message : shcl_write_status_name(why), ue == SHCL_UPGRADE_IO ? e : 0);
+	free(message);
+	free(*name);
+	*name = NULL;
+	return k;
+}
+
+static shclw_kind write_new(void *ctx, const char *path, const char *data, size_t len, shclw_error *err) {
+	(void)ctx;
+	shcl_write_status why = SHCL_WRITE_OK;
+	errno = 0;
+	if (shcl_write_file_atomic(path, data, len, &why)) {
+		return shclw_i_ok(err);
+	}
+	return shclw_i_fail(err, SHCLW_ERR_IO, path, shcl_write_status_name(why), errno);
+}
+
+// The result of a file upgrade that wrote nothing: only the format, and 2.0's
+// errors when that's why.
+static shclw_kind none(shclw_kind k, int64_t from, const shclw_upgraded *u, shclw_upgraded **out, shclw_error *err) {
+	*out = shclw_i_upgraded("", 0, from, false, 0, NULL, u ? u->diags : NULL, u ? u->n_diags : 0);
+	return *out ? k : shclw_i_fail(err, SHCLW_ERR_NO_MEMORY, NULL, NULL, 0);
+}
+
+shclw_kind shclw_upgrade_file(const char *path, int64_t from, shclw_upgraded **out, shclw_error *err) {
+	*out = NULL;
+	if (from > SHCLW_FORMAT_MAJOR) {
+		return none(too_new(err, path, from), from, NULL, out, err);
+	}
+	// A FIFO would block the read, and the write would put a file in place of
+	// a device.
+	if (shclw_i_irregular(path)) {
+		return none(shclw_i_fail(err, SHCLW_ERR_IO, path, "not a regular file", 0), 0, NULL, out, err);
+	}
+	// One read for the 2.0 check, the conversion, and the backup. shcl's own
+	// shcl_upgrade_file would read the file a second time, after the check.
+	char *text = NULL;
+	size_t len = 0;
+	shclw_kind k = shclw_read_text(path, &text, &len, err);
+	if (k != SHCLW_OK) {
+		return none(k, 0, NULL, out, err);
+	}
+	shclw_upgraded *u = NULL;
+	k = upgrade(text, len, from, path, &u, err);
+	if (!u) {
+		free(text);
+		return k;
+	}
+	if (k != SHCLW_OK || !u->changed) {
+		free(text);
+		if (k == SHCLW_OK) {
+			*out = u;
+			return k;
+		}
+		k = none(k, u->from, u, out, err);
+		free(u);
+		return k;
+	}
+	replacing r = {path, text, len, u->from};
+	shclw_i_replacer how = {keep_original, write_new, &r};
+	char *backup = NULL;
+	k = shclw_i_replace_read(path, text, len, u->text.p, u->text.n, &how, &backup, err);
+	free(text);
+	if (k != SHCLW_OK) {
+		k = none(k, u->from, NULL, out, err);
+	} else {
+		*out = shclw_i_upgraded(u->text.p, u->text.n, u->from, true, u->unsure, backup, NULL, 0);
+		k = *out ? k : shclw_i_fail(err, SHCLW_ERR_NO_MEMORY, path, NULL, 0);
+	}
+	free(backup);
+	free(u);
+	return k;
+}

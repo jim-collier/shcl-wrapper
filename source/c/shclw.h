@@ -5,14 +5,20 @@
 // against. The calls are the same as the Go and Rust wrappers', in snake case.
 // See project/design.md.
 //
-// Build: shclw.c, the adapter that matches the shcl.h on the include path
-// (shclw3.c for 3.0), and run.c for shclw_run. shcl.h's own
+// Build: shclw.c, info.c, the adapter that matches the shcl.h on the include
+// path (shclw3.c for 3.0), and run.c for shclw_run. shcl.h's own
 // SHCL_IMPLEMENTATION goes in one .c of the program's, as shcl asks.
+//
+// 3.0 also needs shclw3_v2.c and shclw3_v2_impl.c, built with shcl 2.0's
+// shcl.h on the include path in place of 3.0's. They're shcl 2.0 under other
+// names, which the upgrade checks a 2.x file with. 2.0 ends the program when
+// it runs out of memory.
 //
 // Include this before any system header, since shcl.h has to be first.
 //
-// Memory: the strings, arrays, text, and diagnostics a shclw call hands back
-// are malloc'd, each in one block, and the caller frees them with free().
+// Memory: the strings, arrays, text, diagnostics, and upgrades a shclw call
+// hands back are malloc'd, each in one block, and the caller frees them with
+// free().
 // Documents are freed with shclw_free. Reads copy their value out and give
 // shcl's read memory back before they return. Edits keep what they replaced
 // until shclw_write, which compacts the document after a good save. A
@@ -186,14 +192,69 @@ char *shclw_text(shclw_doc *d, size_t *len);
 // The document in canonical form. Caller frees.
 char *shclw_canonical(shclw_doc *d, size_t *len);
 // Saves shclw_text atomically. SHCLW_ERR_REFUSED when the save would lose
-// lines the load couldn't use. After a good save it gives back the memory
-// earlier edits left behind.
+// lines the load couldn't use. It writes nothing when the info block or the
+// Format line can't go in, since an edit made after shclw_info_block or
+// shclw_stamp_format. After a good save it gives back the memory earlier edits
+// left behind.
 shclw_kind shclw_write(shclw_doc *d, const char *path, shclw_error *err);
+
+// Whether shclw_write puts the canonical form in place of the lines the
+// document was loaded from. 3.0 does that when it can't keep them with the
+// edits in, such as after a child is added under a flat dotted line, and
+// comments can move. It builds the save's text to find out.
+bool shclw_rewrites(shclw_doc *d);
 
 // The load's diagnostics. Caller frees the block. NULL only when memory ran out.
 shclw_diag *shclw_diags(shclw_doc *d, size_t *n);
 // How many of them are errors.
 size_t shclw_errors(shclw_doc *d);
+// d checked against a schema document. Caller frees the block. NULL only when
+// memory ran out.
+shclw_diag *shclw_check(shclw_doc *d, shclw_doc *schema, size_t *n);
+// Takes the repeat and reopen hints for keys schema says repeat out of d's
+// diagnostics, so shclw_diags gives fewer from then on. Go and Rust take a
+// list and give one back; shcl's C binding only filters a document's own.
+void shclw_drop_declared(shclw_doc *schema, shclw_doc *d);
+
+// The format a file's Format line names, or 0 with none.
+int64_t shclw_format_of(const char *text, size_t len);
+
+// What an upgrade made of a file, in one block the caller frees with free().
+// from is the format it was written for. unsure counts lines the upgrade
+// couldn't convert for sure. backup names the copy shclw_upgrade_file made,
+// and is "" with none. diags is shcl 2.0's errors on a file refused for them,
+// which Go and Rust put on the error.
+typedef struct {
+	shclw_string text;
+	int64_t from;
+	bool changed;
+	size_t unsure;
+	shclw_string backup;
+	shclw_diag *diags;
+	size_t n_diags;
+} shclw_upgraded;
+
+// Converts a file written for an older format. With from 0 the file's Format
+// line decides, and a file with none is taken as current. Pass from 2 for a
+// file known to be from shcl 2.x or older; it can't tell those apart by
+// itself. A file that reads two ways is SHCLW_ERR_AMBIGUOUS, and one shcl 2.0
+// reports errors on is SHCLW_ERR_REFUSED. *out is set on a failure too, and is
+// NULL only when memory ran out.
+shclw_kind shclw_upgrade(const char *text, size_t len, int64_t from, shclw_upgraded **out, shclw_error *err);
+// shclw_upgrade on a file. When it changes the file it first copies the
+// original beside it. A file that changed after it was read is left alone with
+// SHCLW_ERR_IO, and a failed write leaves the original in place.
+shclw_kind shclw_upgrade_file(const char *path, int64_t from, shclw_upgraded **out, shclw_error *err);
+
+// Puts the info block at the end of what the save writes, or with on false
+// leaves it out. Either way an old block comes off first, in any spelling
+// shcl has written, wherever it is. A file whose Format line names another
+// format is refused, and so is one that ends in a raw block that never closes.
+// Reads and diagnostics stay as they were.
+shclw_kind shclw_info_block(shclw_doc *d, bool on, shclw_error *err);
+// Adds the Format line at the end of what the save writes, unless a comment
+// already names this format. Refuses what shclw_info_block refuses.
+shclw_kind shclw_stamp_format(shclw_doc *d, shclw_error *err);
 
 // The value, or the fallback when there's no good one.
 int64_t shclw_int(shclw_doc *d, const char *path, int64_t fallback);

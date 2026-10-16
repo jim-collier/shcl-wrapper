@@ -268,10 +268,8 @@ typedef struct {
 	size_t input_len;
 	const char *dir;
 	shclw_doc *doc;
+	shclw_strictness level;
 	buf out;
-	// The op C doesn't have yet that would have changed the document, after
-	// which nothing can be compared until a parse starts over.
-	const char *behind;
 } runner;
 
 // Fields are NUL-terminated for the C API's paths, which can't hold a NUL.
@@ -520,7 +518,7 @@ static void parse(runner *r, const fields *f) {
 	}
 	shclw_free(r->doc);
 	r->doc = doc;
-	r->behind = NULL;
+	r->level = s;
 	result(r, k);
 }
 
@@ -535,9 +533,8 @@ static void text(runner *r, bool canonical) {
 	free(t);
 }
 
-static void diags(runner *r) {
-	size_t n = 0;
-	shclw_diag *ds = shclw_diags(r->doc, &n);
+// Prints and frees ds.
+static void print_diags(runner *r, shclw_diag *ds, size_t n) {
 	if (!ds) {
 		nomem(&r->out);
 		return;
@@ -553,6 +550,12 @@ static void diags(runner *r) {
 		nl(&r->out);
 	}
 	free(ds);
+}
+
+static void diags(runner *r) {
+	size_t n = 0;
+	shclw_diag *ds = shclw_diags(r->doc, &n);
+	print_diags(r, ds, n);
 }
 
 // Keeps a script's file names inside dir. Go's filepath.Base check.
@@ -591,6 +594,78 @@ static void write_(runner *r, const fields *f) {
 	line_out(r, "ok");
 	block(r, saved, n);
 	free(saved);
+}
+
+// A schema check. Mode "all" adds the load's own diagnostics first, and "drop"
+// does that and then drops what the schema declares.
+static void check(runner *r, const fields *f) {
+	char *path = file(r, arg(f, 1));
+	if (!path) {
+		return;
+	}
+	char *text = NULL;
+	size_t len = 0;
+	shclw_kind k = shclw_read_text(path, &text, &len, NULL);
+	free(path);
+	if (k != SHCLW_OK) {
+		result(r, k);
+		return;
+	}
+	shclw_doc *schema = shclw_parse(text, len);
+	free(text);
+	if (!schema) {
+		nomem(&r->out);
+		return;
+	}
+	const char *mode = arg(f, 2);
+	size_t n = 0;
+	shclw_diag *ds = NULL;
+	if (!strcmp(mode, "drop")) {
+		// C's drop works on a document's own list, and the script's document
+		// has to keep its hints, so they come off a fresh load of the same
+		// text. Only the load's hints can go; the check gives none.
+		shclw_doc *fresh = NULL;
+		(void)shclw_parse_with(r->input, r->input_len, r->level, &fresh, NULL);
+		if (fresh) {
+			shclw_drop_declared(schema, fresh);
+			ds = shclw_diags(fresh, &n);
+			print_diags(r, ds, n);
+			shclw_free(fresh);
+		} else {
+			nomem(&r->out);
+		}
+	} else if (!strcmp(mode, "all")) {
+		ds = shclw_diags(r->doc, &n);
+		print_diags(r, ds, n);
+	}
+	ds = shclw_check(r->doc, schema, &n);
+	print_diags(r, ds, n);
+	shclw_free(schema);
+}
+
+static void upgrade(runner *r, const char *from) {
+	int64_t n = 0;
+	if (*from && !parse_int(from, &n)) {
+		line_out(r, "error badvalue");
+		return;
+	}
+	shclw_upgraded *u = NULL;
+	shclw_kind k = shclw_upgrade(r->input, r->input_len, n, &u, NULL);
+	if (!u) {
+		nomem(&r->out);
+		return;
+	}
+	if (k != SHCLW_OK) {
+		result(r, k);
+	} else {
+		puts_(&r->out, "from ");
+		put_i64(&r->out, u->from);
+		puts_(&r->out, u->changed ? " changed true unsure " : " changed false unsure ");
+		put_size(&r->out, u->unsure);
+		nl(&r->out);
+		block(r, u->text.p, u->text.n);
+	}
+	free(u);
 }
 
 static void counted_sizes(buf *b, const size_t *v, size_t n) {
@@ -773,63 +848,73 @@ static void op_errors(runner *r, const fields *f) {
 static void op_get(runner *r, const fields *f) { get(r, arg(f, 1), arg(f, 2)); }
 static void op_or(runner *r, const fields *f) { or_(r, f); }
 static void op_write(runner *r, const fields *f) { write_(r, f); }
+static void op_rewrites(runner *r, const fields *f) {
+	(void)f;
+	line_out(r, shclw_rewrites(r->doc) ? "true" : "false");
+}
+static void op_info(runner *r, const fields *f) {
+	const char *on = arg(f, 1);
+	if (strcmp(on, "on") != 0 && strcmp(on, "off") != 0) {
+		line_out(r, "error badvalue");
+		return;
+	}
+	result(r, shclw_info_block(r->doc, !strcmp(on, "on"), NULL));
+}
+static void op_stamp(runner *r, const fields *f) {
+	(void)f;
+	result(r, shclw_stamp_format(r->doc, NULL));
+}
+static void op_check(runner *r, const fields *f) { check(r, f); }
+static void op_format(runner *r, const fields *f) {
+	(void)f;
+	put_i64(&r->out, shclw_format_of(r->input, r->input_len));
+	nl(&r->out);
+}
+static void op_upgrade(runner *r, const fields *f) { upgrade(r, arg(f, 1)); }
 
-// Every op in design.md's "Ops scripts". One with no function isn't in C yet
-// and prints "error notyet"; edits says it would have changed the document.
+// Every op in design.md's "Ops scripts".
 // clang-format off
 static const struct {
 	const char *name;
 	void (*run)(runner *, const fields *);
-	bool edits;
 } ops[] = {
-	{"parse",     op_parse,     false},
-	{"text",      op_text,      false},
-	{"canonical", op_canonical, false},
-	{"rewrites",  NULL,         false},
-	{"diags",     op_diags,     false},
-	{"errors",    op_errors,    false},
-	{"get",       op_get,       false},
-	{"or",        op_or,        false},
-	{"has",       op_has,       false},
-	{"count",     op_count,     false},
-	{"line",      op_line,      false},
-	{"lines",     op_lines,     false},
-	{"first",     op_first,     false},
-	{"last",      op_last,      false},
-	{"names",     op_names,     false},
-	{"each",      op_each,      false},
-	{"eachget",   op_eachget,   false},
-	{"put",       op_put,       true},
-	{"syntax",    op_syntax,    true},
-	{"comment",   op_comment,   true},
-	{"remove",    op_remove,    true},
-	{"info",      NULL,         true},
-	{"stamp",     NULL,         true},
-	{"check",     NULL,         false},
-	{"format",    NULL,         false},
-	{"upgrade",   NULL,         false},
-	{"write",     op_write,     false},
+	{"parse",     op_parse},
+	{"text",      op_text},
+	{"canonical", op_canonical},
+	{"rewrites",  op_rewrites},
+	{"diags",     op_diags},
+	{"errors",    op_errors},
+	{"get",       op_get},
+	{"or",        op_or},
+	{"has",       op_has},
+	{"count",     op_count},
+	{"line",      op_line},
+	{"lines",     op_lines},
+	{"first",     op_first},
+	{"last",      op_last},
+	{"names",     op_names},
+	{"each",      op_each},
+	{"eachget",   op_eachget},
+	{"put",       op_put},
+	{"syntax",    op_syntax},
+	{"comment",   op_comment},
+	{"remove",    op_remove},
+	{"info",      op_info},
+	{"stamp",     op_stamp},
+	{"check",     op_check},
+	{"format",    op_format},
+	{"upgrade",   op_upgrade},
+	{"write",     op_write},
 };
 // clang-format on
 
 static void op(runner *r, const fields *f) {
 	const char *name = arg(f, 0);
 	for (size_t i = 0; i < sizeof ops / sizeof ops[0]; i++) {
-		if (strcmp(ops[i].name, name) != 0) {
-			continue;
-		}
-		if (r->behind && ops[i].run != op_parse) {
-			puts_(&r->out, "error notyet after ");
-			line_out(r, r->behind);
-		} else if (!ops[i].run) {
-			line_out(r, "error notyet");
-			if (ops[i].edits) {
-				r->behind = ops[i].name;
-			}
-		} else {
+		if (!strcmp(ops[i].name, name)) {
 			ops[i].run(r, f);
+			return;
 		}
-		return;
 	}
 	line_out(r, "error unknownop");
 }
@@ -857,7 +942,7 @@ char *shclw_run(const char *input, size_t len, const char *script, size_t script
 		script = "";
 		script_len = 0;
 	}
-	runner r = {input, len, dir, shclw_parse(input, len), {NULL, 0, 0, false}, NULL};
+	runner r = {input, len, dir, shclw_parse(input, len), SHCLW_STANDARD, {NULL, 0, 0, false}};
 	if (!r.doc) {
 		return NULL;
 	}

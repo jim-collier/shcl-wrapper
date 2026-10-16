@@ -247,7 +247,7 @@ impl From<f64> for Value {
 impl From<f32> for Value {
 	fn from(v: f32) -> Value {
 		// v.into() would write the f32's binary noise: 0.9 as 0.8999999761581421.
-		Value::Float(v.to_string().parse().unwrap_or(v.into()))
+		Value::Float(shortest(v.into(), true).parse().unwrap_or(v.into()))
 	}
 }
 impl From<bool> for Value {
@@ -893,12 +893,51 @@ pub fn format_float(f: f64) -> String {
 	if f.is_infinite() {
 		return if f > 0.0 { "inf" } else { "-inf" }.to_owned();
 	}
-	let s = format!("{f:e}");
+	let s = shortest(f, false);
 	let (mant, exp) = s.split_once('e').unwrap_or((s.as_str(), "0"));
 	let exp: i32 = exp.parse().unwrap_or(0);
 	let neg = mant.starts_with('-');
 	let digits: String = mant.trim_start_matches('-').chars().filter(|c| *c != '.').collect();
 	assemble_float(neg, &digits, exp)
+}
+
+/// The shortest digits that read back as `f`, or as `f` taken as an f32
+/// with `single`, in `{:e}` form, as Go's strconv gives them. Rust rounds an
+/// exact tie at that length away from zero, and Go to even, except at a power
+/// of 2 (`shclw_i_shortest` in the C wrapper has why).
+fn shortest(f: f64, single: bool) -> String {
+	#[allow(clippy::cast_possible_truncation)]
+	let at = |prec: Option<usize>| match (single, prec) {
+		(false, None) => format!("{f:e}"),
+		(false, Some(p)) => format!("{f:.p$e}"),
+		(true, None) => format!("{:e}", f as f32),
+		(true, Some(p)) => format!("{:.p$e}", f as f32),
+	};
+	let s = at(None);
+	#[allow(clippy::cast_possible_truncation)]
+	let (pow2, field, odd_one) = if single {
+		let b = (f as f32).to_bits();
+		(b.trailing_zeros() >= 23, u64::from((b >> 23) & 0xff), 73)
+	} else {
+		let b = f.to_bits();
+		(b.trailing_zeros() >= 52, (b >> 52) & 0x7ff, 998)
+	};
+	// Go leaves 2^-25, or as an f32 2^-54, at even.
+	if pow2 && field != 0 && field != odd_one {
+		return s;
+	}
+	let n = s.bytes().take_while(|&c| c != b'e').filter(u8::is_ascii_digit).count();
+	let even = at(Some(n.saturating_sub(1)));
+	let back = if single {
+		even.parse::<f32>().map(f64::from)
+	} else {
+		even.parse::<f64>()
+	};
+	if back == Ok(f) {
+		even
+	} else {
+		s
+	}
 }
 
 fn assemble_float(neg: bool, digits: &str, exp: i32) -> String {

@@ -45,6 +45,25 @@ fn check_f32<L: Lib>(n: u32) {
 			assert_eq!(d.text(), *text, "v{n} {f}: text");
 		}
 	}
+	// An exact tie goes to even, as Go's strconv has it, but at an f32 power
+	// of 2 Go rounds up.
+	for (bits, want) in [
+		(0x3b20_0000_u32, "0.0024414062"),
+		(0xbb20_0000, "-0.0024414062"),
+		(0x3980_0000, "0.00024414063"),
+	] {
+		let f = f32::from_bits(bits);
+		let mut d = L::parse("");
+		if let Err(e) = d.put("f", f) {
+			panic!("v{n} {f}: {e}");
+		}
+		let g = d.get_float("f");
+		assert_eq!(
+			(g.status, g.value),
+			(Status::Good, want.parse().unwrap()),
+			"v{n} {f}: tie"
+		);
+	}
 	for f in [f32::NAN, f32::INFINITY] {
 		let mut d = L::parse("");
 		let e = d.put("f", f).expect_err("non-finite put");

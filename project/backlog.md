@@ -565,6 +565,7 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Note: Go's `FormatIn`, which 1.2 and 2.0 use, isn't in C yet. That's for 2026101516111070, with the rest of those 2 versions.
 	- Verified: the gate passes, with all 33 shared cases whole and 345 ops compared in C. Each new check failed with its rule taken out: the 2.0 refusal, the `From` fix, the restore after a failed replace, the hint drop, the raw body check in the info block, a second read of the file during the upgrade, and a 2.0 name left unrenamed.
 	- Branch: c-format
+	- Commit: c71ca83
 	- Test case: `test_replace_read`, `test_upgrade`, `test_upgrade_file`, `test_upgrade_raced`, `test_info`, `test_rewrites`, and `test_check` in `source/c/tests/api_test.c`, the Makefile's `names` check, and the shared cases through `cicd/c_cases.py`.
 	- Swept: every op in design.md's ops table has a C function in `run.c`. Every C call that hands back an upgrade sets it on a failure too, as Go does. design.md's C notes on layout, sharing the code, and the ops runner.
 	- Acceptance signoff: Waiting. New API, and the 3 decisions above are C's own.

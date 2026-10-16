@@ -1,0 +1,20 @@
+# A save gives back what edits replaced. Edits after it keep the lines, and
+# reads and lines are the same as before it.
+put	int	port	9090
+put	str	name	Other
+lines	tv.f
+each	tv
+write	out.shcl
+text
+lines	tv.f
+each	tv
+get	int	port
+put	int	port	7070
+comment	port	the port
+put	str	extra	new
+write	out.shcl
+text
+last	int	tv.f
+remove	tv.f
+text
+get	str	name

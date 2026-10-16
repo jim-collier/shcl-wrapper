@@ -162,6 +162,10 @@ shclw_kind shclw_write(shclw_doc *d, const char *path, shclw_error *err) {
 	int e = errno;
 	shcl_reads_release(d->d);
 	if (wrote) {
+		// A save is where a program is done with a round of edits, and what
+		// they replaced stays in shcl's write memory until this
+		// (2026101516110996).
+		shcl_compact(d->d);
 		return shclw_i_ok(err);
 	}
 	shclw_kind kind = why == SHCL_WRITE_NOT_FOUND ? SHCLW_ERR_NOT_FOUND : SHCLW_ERR_IO;
@@ -365,3 +369,185 @@ shclw_got_floats shclw_get_floats(shclw_doc *d, const char *path) {
 	shclw_i_finite_all(&g);
 	return g;
 }
+
+bool shclw_has(shclw_doc *d, const char *path) {
+	int v = shcl_exists(d->d, path, strlen(path));
+	shcl_reads_release(d->d);
+	return v != 0;
+}
+
+size_t shclw_count(shclw_doc *d, const char *path) {
+	size_t n = shcl_count(d->d, path, strlen(path));
+	shcl_reads_release(d->d);
+	return n;
+}
+
+size_t shclw_line(shclw_doc *d, const char *path) {
+	size_t n = shcl_line(d->d, path, strlen(path));
+	shcl_reads_release(d->d);
+	return n;
+}
+
+// 3.0 lists every instance's children, a name once per line it's on.
+shclw_string *shclw_names(shclw_doc *d, const char *path, size_t *n) {
+	*n = 0;
+	shcl_str *kids = NULL;
+	size_t count = shcl_children(d->d, path, strlen(path), &kids);
+	shclw_string *names = (shclw_string *)shclw_i_alloc(count * sizeof(shclw_string));
+	shclw_string *out = NULL;
+	if (names) {
+		for (size_t i = 0; i < count; i++) {
+			names[i].p = kids[i].p;
+			names[i].n = kids[i].n;
+		}
+		out = shclw_i_dedupe_names(names, count, n);
+		free(names);
+	}
+	shcl_reads_release(d->d);
+	return out;
+}
+
+// 3.0's own instance paths, with an index on every step that repeats. A
+// wildcard slot that reaches no node or several has none, and also is left out.
+shclw_node *shclw_each(shclw_doc *d, const char *path, size_t *n) {
+	*n = 0;
+	shcl_read_field_list r = shcl_read_fields(d->d, path, strlen(path));
+	size_t count = r.values ? r.n : 0;
+	shclw_node *nodes = (shclw_node *)shclw_i_alloc(count * sizeof(shclw_node));
+	shclw_node *out = NULL;
+	if (nodes) {
+		size_t kept = 0;
+		for (size_t i = 0; i < count; i++) {
+			if (!r.values[i].path.n) {
+				continue;
+			}
+			nodes[kept].path.p = r.values[i].path.p;
+			nodes[kept].path.n = r.values[i].path.n;
+			nodes[kept].value.p = r.values[i].value.p;
+			nodes[kept].value.n = r.values[i].value.n;
+			nodes[kept].line = r.values[i].line;
+			kept++;
+		}
+		out = shclw_i_copy_nodes(nodes, kept, n);
+		free(nodes);
+	}
+	shcl_reads_release(d->d);
+	return out;
+}
+
+char *shclw_child(shclw_doc *d, const char *base, const char *name, size_t name_len, size_t *len) {
+	if (len) {
+		*len = 0;
+	}
+	shcl_str seg = shcl_quote_segment(d->d, name ? name : "", name ? name_len : 0);
+	size_t blen = strlen(base);
+	size_t total = blen ? blen + 1 + seg.n : seg.n;
+	char *out = seg.n < SIZE_MAX / 2 && blen < SIZE_MAX / 4 ? (char *)malloc(total + 1) : NULL;
+	if (out) {
+		if (blen) {
+			memcpy(out, base, blen);
+			out[blen] = '.';
+		}
+		memcpy(out + total - seg.n, seg.p, seg.n);
+		out[total] = '\0';
+		if (len) {
+			*len = total;
+		}
+	}
+	shcl_reads_release(d->d);
+	return out;
+}
+
+static shclw_kind set_err(shclw_error *err, const char *path, shcl_set_status st) {
+	switch (st) {
+	case SHCL_SET_OK: return shclw_i_ok(err);
+	case SHCL_SET_BAD_PATH:
+	case SHCL_SET_VALUE_IN_PATH:
+	case SHCL_SET_WILDCARD:
+	case SHCL_SET_NO_SUCH_INDEX:
+	case SHCL_SET_TOO_DEEP:
+	case SHCL_SET_MULTIPLE:
+	case SHCL_SET_UNDER_ARRAY:
+	case SHCL_SET_HAS_CHILDREN:
+	case SHCL_SET_RAW_BLOCK: return shclw_i_fail(err, SHCLW_ERR_BAD_PATH, path, shcl_set_status_name(st), 0);
+	default: return shclw_i_fail(err, SHCLW_ERR_BAD_VALUE, path, shcl_set_status_name(st), 0);
+	}
+}
+
+static shclw_kind set_strs(shclw_doc *d, const char *path, size_t plen, const shclw_i_value *v, shclw_error *err) {
+	const char **items = (const char **)shclw_i_alloc(v->n * sizeof(char *));
+	size_t *lens = (size_t *)shclw_i_alloc(v->n * sizeof(size_t));
+	if (!items || !lens || v->n > SIZE_MAX / sizeof(char *)) {
+		free((void *)items);
+		free(lens);
+		return shclw_i_fail(err, SHCLW_ERR_NO_MEMORY, path, NULL, 0);
+	}
+	for (size_t i = 0; i < v->n; i++) {
+		items[i] = v->strs[i].p ? v->strs[i].p : "";
+		lens[i] = v->strs[i].p ? v->strs[i].n : 0;
+	}
+	shcl_set_status st = shcl_set_string_array(d->d, path, plen, items, lens, v->n);
+	free((void *)items);
+	free(lens);
+	return set_err(err, path, st);
+}
+
+shclw_kind shclw_i_set(shclw_doc *d, const char *path, const shclw_i_value *v, shclw_error *err) {
+	size_t plen = strlen(path);
+	shcl_set_status st = SHCL_SET_OK;
+	switch (v->kind) {
+	case SHCLW_I_INT: st = shcl_set_int(d->d, path, plen, v->i); break;
+	case SHCLW_I_FLOAT: st = shcl_set_float(d->d, path, plen, v->f); break;
+	case SHCLW_I_BOOL: st = shcl_set_bool(d->d, path, plen, v->b ? 1 : 0); break;
+	case SHCLW_I_STR: st = shcl_set_string(d->d, path, plen, v->str, v->n); break;
+	case SHCLW_I_STRS: return set_strs(d, path, plen, v, err);
+	case SHCLW_I_INTS: st = shcl_set_int_array(d->d, path, plen, v->ints, v->n); break;
+	case SHCLW_I_FLOATS: st = shcl_set_float_array(d->d, path, plen, v->floats, v->n); break;
+	}
+	return set_err(err, path, st);
+}
+
+shclw_kind shclw_put_syntax(shclw_doc *d, const char *path, const char *text, size_t len, shclw_error *err) {
+	if (!text) {
+		text = "";
+		len = 0;
+	}
+	shclw_kind k = set_err(err, path, shcl_set_literal(d->d, path, strlen(path), text, len));
+	if (k != SHCLW_OK) {
+		return k;
+	}
+	if (len > SIZE_MAX - 8) {
+		return shclw_i_fail(err, SHCLW_ERR_NO_MEMORY, path, NULL, 0);
+	}
+	static const char key[] = "k: ";
+	size_t klen = sizeof key - 1;
+	char *typed = (char *)malloc(klen + len + 1);
+	shclw_doc *alone = shclw_new();
+	shclw_doc *line = NULL;
+	if (typed) {
+		memcpy(typed, key, klen);
+		if (len) {
+			memcpy(typed + klen, text, len);
+		}
+		typed[klen + len] = '\n';
+		line = shclw_parse(typed, klen + len + 1);
+		free(typed);
+	}
+	if (!alone || !line) {
+		shclw_free(alone);
+		shclw_free(line);
+		return shclw_i_fail(err, SHCLW_ERR_NO_MEMORY, path, NULL, 0);
+	}
+	// A failed set leaves alone empty, which the check reports.
+	(void)shcl_set_literal(alone->d, "k", 1, text, len);
+	k = shclw_i_verify_syntax(d, path, alone, line, err);
+	shclw_free(alone);
+	shclw_free(line);
+	return k;
+}
+
+shclw_kind shclw_comment(shclw_doc *d, const char *path, const char *text, size_t len, shclw_error *err) {
+	return set_err(err, path, shcl_set_comment(d->d, path, strlen(path), text ? text : "", text ? len : 0));
+}
+
+size_t shclw_remove(shclw_doc *d, const char *path) { return shcl_remove(d->d, path, strlen(path)); }

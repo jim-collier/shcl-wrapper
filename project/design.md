@@ -6,7 +6,7 @@
 <!-- TOC ignore:true -->
 # Design
 
-Status: draft, 2026-10-15. Go and Rust are built over shcl 1.2, 2.0, and 3.0. C has the whole API over 3.0, and C over 1.2 and 2.0 is in the backlog with Python and shcl 4.
+Status: draft, 2026-10-15. Go, Rust, and C are built over shcl 1.2, 2.0, and 3.0. Python and shcl 4 are in the backlog.
 
 <!-- TOC ignore:true -->
 ## Table of contents
@@ -85,11 +85,11 @@ Status: draft, 2026-10-15. Go and Rust are built over shcl 1.2, 2.0, and 3.0. C 
 
 ## Layout
 
-| Language | Where                                        | Pick the shcl version by
-| :---     | :---                                         | :---
-| Go       | `source/go/shclw`, plus `shclw1` to `shclw3` | import path: `.../source/go/shclw3`
-| Rust     | `source/rust`, crate `shclw`                 | feature `shcl1` to `shcl3`, then module `shclw::v1` to `shclw::v3`
-| C        | `source/c`, `shclw.h`, plus `shclw3.c`       | the `shcl.h` the build includes; 3.0 so far
+| Language | Where                                                | Pick the shcl version by
+| :---     | :---                                                 | :---
+| Go       | `source/go/shclw`, plus `shclw1` to `shclw3`         | import path: `.../source/go/shclw3`
+| Rust     | `source/rust`, crate `shclw`                         | feature `shcl1` to `shcl3`, then module `shclw::v1` to `shclw::v3`
+| C        | `source/c`, `shclw.h`, plus `shclw1.c` to `shclw3.c` | the `shcl.h` the build includes, and `SHCLW_SHCL` 1 or 2 for 1.2 and 2.0
 
 - Go can't import one package or another by condition inside one file, so each shcl version gets its own small package. They have the same calls, checked by the compiler against the `shclw.Doc` interface. The shared types and the ops runner are in `shclw`.
 
@@ -97,7 +97,8 @@ Status: draft, 2026-10-15. Go and Rust are built over shcl 1.2, 2.0, and 3.0. C 
 
 - Each version's code is a copy of the one before with its differences made, so a reader sees the whole adapter in one file.
 
-- C has one header, `shclw.h`, which includes the program's own `shcl.h` and works out its version from what it declares. `shclw.c` has what every version shares, and each version has its own adapter file, `shclw3.c` for 3.0, as Go has a package. A program builds `shclw.c`, `info.c`, and the one adapter that matches its `shcl.h`. Built against another version, the adapter stops the build with an error. `run.c` has `shclw_run` and is only needed for ops scripts.
+- C has one header, `shclw.h`, which includes the program's own `shcl.h` and works out its version from what it declares. `shclw.c` has what every version shares, and each version has its own adapter file, `shclw1.c` to `shclw3.c`, as Go has a package. A program builds `shclw.c`, `info.c`, and the one adapter that matches its `shcl.h`. Built against another version, the adapter stops the build with an error. `run.c` has `shclw_run` and is only needed for ops scripts.
+	- 1.2's and 2.0's `shcl.h` declare different calls but define the same macros, so a program on either sets `SHCLW_SHCL` to 1 or 2 for every file that includes `shclw.h`. Without it the build stops and says so, and a wrong one fails to compile. 3.0 needs none.
 	- On 3.0 the program also builds `shclw3_v2.c` and `shclw3_v2_impl.c`, with shcl 2.0's `shcl.h` on their include path, for the upgrade check.
 	- The header is usable from C++, and the build compiles every C file as C++ too.
 
@@ -341,7 +342,7 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 
 - Rust: a git dependency on this repo with one feature on, or a copy of `source/rust/src`.
 
-- C: a copy of `shclw.h`, `shclw_adapter.h`, `shclw.c`, `info.c`, and the adapter for the program's shcl, plus `run.c` for ops scripts. The program builds `shcl.h`'s own implementation once, as shcl asks. On 3.0 it also takes the `shclw3_v2` files and shcl 2.0's `shcl.h`.
+- C: a copy of `shclw.h`, `shclw_adapter.h`, `shclw.c`, `info.c`, and the adapter for the program's shcl, plus `run.c` for ops scripts. The program builds `shcl.h`'s own implementation once, as shcl asks. On 3.0 it also takes the `shclw3_v2` files and shcl 2.0's `shcl.h`. On 1.2 and 2.0 it sets `SHCLW_SHCL`, such as `-DSHCLW_SHCL=2`.
 
 - A fix made in a copy goes back here, with a case, so every program gets it.
 
@@ -408,6 +409,8 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 - A C call that can fail returns a `shclw_kind`, `SHCLW_OK` on success, with details in a `shclw_error` out-parameter that may be NULL. The kinds are Go's in the same order, plus `SHCLW_ERR_NO_MEMORY`, which only C can see. A call that makes a document still gives one back on failure, empty for a file it couldn't read, as Go does.
 
 - C picks the shcl version at compile time, from what `shcl.h` declares, since that's the only place C can pick it. 3.0 is the first `shcl.h` with a version macro, `SHCL_FORMAT_MAJOR`.
+	- 1.2 and 2.0 are told apart by `SHCLW_SHCL`, a macro the program sets to 1 or 2. The preprocessor can only see macros, and theirs are the same. A probe in the build that tries a 2.0 call was the other choice, but then every program's build would need one.
+	- With no `SHCLW_SHCL` on 1.2 or 2.0 the build stops with a message saying to set it. A wrong one fails to compile on `shcl_lost_count`, which is new in 2.0: built as 2.0, `shclw.h` takes its size, and 1.2 has none, and built as 1.2 it's declared another way, which clashes with 2.0's own. A `make pick` check builds each `shcl.h` with each pick in C and C++.
 
 - C builds shcl 2.0 in beside 3.0 for the upgrade check, as Go and Rust do, rather than leave the check out of C. 2.0's calls are renamed by macros ahead of its `shcl.h`, in 2 files that never see 3.0's, so shcl isn't edited, and a build check fails on any 2.0 name left as it was.
 	- A 3.0 program then needs 2.0's `shcl.h` to build, and its code grows by 2.0's parser.
@@ -415,13 +418,17 @@ An ops script is one op per line, with fields split by tabs. `\t`, `\n`, `\r`, a
 
 - The C upgrade gives one block, `shclw_upgraded`, and shcl 2.0's errors on a refused file are in it, rather than on the error. `shclw_error` is a fixed struct the caller never frees, and a list on it would need freeing after any call that can fail.
 
+- On 1.2 and 2.0, C reads, text, and edits keep their memory in the document until `shclw_free`, since those versions have no call that gives it back. 200,000 reads grew it by about 67 MB, where 3.0 stays under 64 KB. A program on them that reads in a loop for a long time loads its document again now and then.
+
+- C's 1.2 save is the wrapper's own atomic write, ported from Go's, since 1.2 has none. 2.0's goes through shcl's `shcl_write_file_atomic`, as Go's 2.0 save goes through shcl's, so `shclw2.c` won't build with `SHCL_NO_FILE_IO`.
+
+- On 1.2 and 2.0 a name that holds a NUL can't go in a C path. Those versions have no escape for it and quote it as it is. `shclw_child` gives that path with its whole length, and read as a C string it's a quote that never closes, which reads nothing and which edits refuse.
+
 - C's `shclw_drop_declared` takes the document and drops hints from its own diagnostics, rather than taking a list as Go and Rust do. shcl's C binding has only that form, and the match is on hint text that shcl builds inside itself.
 
 - The build gets `shcl.h` by commit, checked by sha256, into a cache the repo ignores, rather than keeping a copy of each version in the repo. That's how Go and Rust get theirs too, through their package managers. The pins are in `source/c/shcl-pins.env`.
 
 ## Open questions
-
-- 1.2's and 2.0's `shcl.h` define the same macros, so the preprocessor can't tell them apart, and 1.2's calls are a subset of 2.0's. The C adapters for them need another way to pick: a probe in the build that tries a call only 2.0 has, or a macro the program sets, with the 2.0 adapter calling something only 2.0 has so a wrong pick fails to build.
 
 - When shcl 3.0's first beta is cut, the Go module path is still `.../v2`. Go won't take a `v3.0.0-beta1` tag on a `/v2` path, so the pin stays a commit until shcl's module path changes.
 

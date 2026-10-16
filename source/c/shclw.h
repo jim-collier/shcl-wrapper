@@ -28,9 +28,9 @@
 // Documents are freed with shclw_free. On 3.0, reads copy their value out and
 // give shcl's read memory back before they return, and edits keep what they
 // replaced until shclw_write, which compacts the document after a good save.
-// A program that edits in a loop and never saves can call
-// shcl_compact(shclw_inner(d)) itself. 1.2 and 2.0 have no call that gives
-// memory back, so there reads, text, and edits keep theirs until shclw_free.
+// A program that edits in a loop and never saves can call shclw_compact. 1.2
+// and 2.0 have no call that gives memory back, so there reads, text, and edits
+// keep theirs until shclw_free.
 //
 // Strings: anything shclw hands back has its length and a NUL after it. Go by
 // the length, since a value can hold a NUL. Paths and file names are plain
@@ -229,6 +229,10 @@ char *shclw_canonical(shclw_doc *d, size_t *len);
 // shclw_info_block or shclw_stamp_format. On 3.0, after a good save it gives
 // back the memory earlier edits left behind.
 shclw_kind shclw_write(shclw_doc *d, const char *path, shclw_error *err);
+// Gives back what earlier edits left behind, as a good shclw_write does, for a
+// program that edits a lot between saves. C only, since Go and Rust free it
+// themselves. Does nothing on 1.2 and 2.0.
+void shclw_compact(shclw_doc *d);
 
 // Whether shclw_write puts the canonical form in place of the lines the
 // document was loaded from. 3.0 does that when it can't keep them with the

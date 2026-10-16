@@ -745,6 +745,53 @@ static void test_saves_give_back(void) {
 #endif
 }
 
+static void test_compact(void) {
+	shclw_doc *d = parse_z("# note\nk: 1\nn: 2\n");
+	size_t len = 0;
+	// What a read handed out is the caller's, so it outlives a compaction.
+	char *k = shclw_str(d, "k", "", 0, &len);
+	shclw_compact(d);
+	CHECK(k && len == 1 && k[0] == '1');
+	free(k);
+	CHECK(shclw_line(d, "n") == 3 && shclw_int(d, "n", 0) == 2);
+	shclw_compact(NULL);
+#if SHCLW_SHCL < 3
+	(void)puts("api: 1.2 and 2.0 have nothing for shclw_compact to give back");
+#elif defined(__GLIBC__) && !defined(UNDER_ASAN)
+	enum { BIG = 16 * 1024 };
+	char *value = (char *)malloc(BIG);
+	CHECK(value != NULL);
+	if (!value) {
+		shclw_free(d);
+		return;
+	}
+	memset(value, 'x', BIG);
+	struct mallinfo2 before = mallinfo2();
+	for (int i = 0; i < 201; i++) {
+		if (i == 1) {
+			before = mallinfo2();
+		}
+		value[0] = (char)('a' + i % 26);
+		CHECK(shclw_put_str(d, "k", value, BIG, NULL) == SHCLW_OK);
+		shclw_compact(d);
+	}
+	struct mallinfo2 after = mallinfo2();
+	size_t grew = after.uordblks > before.uordblks ? after.uordblks - before.uordblks : 0;
+	if (grew > (size_t)256 * 1024) {
+		(void)fprintf(stderr, "200 puts with no save kept %zu bytes\n", grew);
+	}
+	CHECK(grew <= (size_t)256 * 1024);
+	CHECK(shclw_line(d, "n") == 3);
+	char *t = shclw_text(d, &len);
+	CHECK(t && !strncmp(t, "# note\nk: ", 10) && len > BIG);
+	free(t);
+	free(value);
+#else
+	(void)puts("api: memory over many edits isn't measured in this build");
+#endif
+	shclw_free(d);
+}
+
 static void path_in(char *out, size_t cap, const char *dir, const char *name) {
 	CHECK(snprintf(out, cap, "%s/%s", dir, name) < (int)cap);
 }
@@ -1258,6 +1305,7 @@ int main(void) {
 	test_shortest();
 	test_several();
 	test_saves_give_back();
+	test_compact();
 	test_save();
 	test_replace_read();
 	test_upgrade();

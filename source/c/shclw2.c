@@ -222,6 +222,9 @@ void shclw_free(shclw_doc *d) {
 
 shcl_doc *shclw_inner(shclw_doc *d) { return d->d; }
 
+// 2.0 has no shcl_compact.
+void shclw_compact(shclw_doc *d) { (void)d; }
+
 // The save's text, with the info block and the Format line as asked, or
 // without them when an edit since made them impossible; shclw_write says why.
 static char *finish(shclw_doc *d, size_t *len) {

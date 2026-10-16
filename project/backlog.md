@@ -801,23 +801,6 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Parent ID: 2026101512024159
 	- Note: Cobblevale compiles shcl in one file with `SHCL_NO_FILE_IO`, since the file calls pull in `windows.h`, adn writes files itself. Write would need its own code for that build.
 
-- C: build 3.0 without shcl 2.0
-	- ID: 2026101611292826
-	- Type: Feature
-	- Status: Queued
-	- Priority: Avg
-	- Opened: 20261016-112928
-	- Opened by: JC
-	- Parent ID: 2026101512024159
-	- Related IDs: 2026101516111033, 2026101513330048, 2026101513330049, 2026101613005800
-	- Requirements:
-		- A macro that leaves the `shclw3_v2` files and 2.0's `shcl.h` out of a 3.0 build.
-		- An upgrade of a 2.x file in that build doesn't pass along lines 2.0 would have refused.
-	- Note: Both C programs are on 3.0, and moving onto the wrapper would build 2.0 into each. Cobblevale builds shcl inside an Unreal module with `SHCL_NO_FILE_IO`. 2.0 ends the program when memory runs out.
-	- Decisions:
-		- 20261016, JC: without 2.0, an upgrade of a 2.x file is refused. A program that needs it builds 2.0 in.
-	- Note: Once 3.0 is the floor (2026101613005800), a build without 2.0 is the usual one, and 2.0 goes in only with the upgrade.
-
 - Make shcl 3.0 the floor
 	- ID: 2026101613005800
 	- Type: Feature
@@ -830,12 +813,14 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- Drop the 1.2 and 2.0 adapters in Go, Rust, and C, with their tests and want files.
 		- Pin 3.0 dev until `v3.0.0-beta1` is tagged, then pin the tag.
 		- Programs move old files through the wrapper's upgrade, in place of their own upgrade code.
-		- The upgrade is opt-in: its own Go package, a cargo feature, and a C macro. Only it builds 2.0 in, for the check.
+		- The upgrade, with its 2.0 check, is part of every build. Each program moves its old files forward.
 		- It covers 1.2 and 2.0 files as the existing programs wrote them. Wovenshell's released betas wrote 1.2.
 		- Test cases from real files each program wrote.
 		- Tallowbase, Mossrealm, and Lenscart move to 3.0 as they move onto the wrapper.
 		- design.md and README say 3.0 is the floor.
 	- Note: Makes the C 1.2 and 2.0 item moot. 4 keeps 3.0's file format but changes the API a lot, so a 4 adapter is still real work.
+	- Decisions:
+		- 20261016, JC: the upgrade is required, not opt-in. 2.0 adds about 164 KB to a small Go program and 29 KB to a C one.
 
 - C: one generated header with shcl inside
 	- ID: 2026101613005801
@@ -850,7 +835,7 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- cicd builds one `shclw.h` from the wrapper's C files and the pinned `shcl.h`. `#define SHCLW_IMPLEMENTATION` in one of the program's .c files builds both.
 		- A program needs no other shcl files and no build flags.
 		- The gate runs the C tests and shared cases against the generated file.
-		- The opt-in upgrade puts 2.0 inside too, behind its macro.
+		- 2.0 goes inside too, under its renamed calls, for the upgrade.
 		- A program that calls shcl directly uses the copy inside.
 		- README's C section says how.
 	- Note: Cobblevale will stop calling shcl directly once it's on the wrapper.
@@ -1331,6 +1316,24 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Swept: Rust `tests/cases.rs` and `tests/api.rs` are the only Rust tests that make folders. Go's tests use `t.TempDir()`, and its fuzzer writes no files. cicd/fuzz.py left its `--work` folder behind when run by itself. Under cicd.bash all of these sit inside the run's own folder, which its exit trap removes, so a cicd run hid the leak.
 	- Acceptance signoff: Self-closed: does what the item asked, checked before and after.
 	- Closed: 20261015-143031
+
+- C: build 3.0 without shcl 2.0
+	- ID: 2026101611292826
+	- Type: Feature
+	- Status: Moot
+	- Priority: Avg
+	- Opened: 20261016-112928
+	- Opened by: JC
+	- Parent ID: 2026101512024159
+	- Related IDs: 2026101516111033, 2026101513330048, 2026101513330049, 2026101613005800
+	- Requirements:
+		- A macro that leaves the `shclw3_v2` files and 2.0's `shcl.h` out of a 3.0 build.
+		- An upgrade of a 2.x file in that build doesn't pass along lines 2.0 would have refused.
+	- Note: Both C programs are on 3.0, and moving onto the wrapper would build 2.0 into each. Cobblevale builds shcl inside an Unreal module with `SHCL_NO_FILE_IO`. 2.0 ends the program when memory runs out.
+	- Decisions:
+		- 20261016, JC: without 2.0, an upgrade of a 2.x file is refused. A program that needs it builds 2.0 in.
+	- Note: Moot since the upgrade is part of every build (2026101613005800), so every C build has 2.0.
+	- Closed: 20261016-132000
 
 ## Template
 

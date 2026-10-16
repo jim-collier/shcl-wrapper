@@ -336,6 +336,42 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Swept: every op in design.md's ops table has a C function in `run.c`. Every C call that hands back an upgrade sets it on a failure too, as Go does. design.md's C notes on layout, sharing the code, and the ops runner.
 	- Acceptance signoff: Waiting. New API, and the 3 decisions above are C's own.
 
+- C: shcl 1.2 and 2.0
+	- ID: 2026101516111070
+	- Type: Feature
+	- Status: Waiting on signoff
+	- Needs external testing: C hasn't run on Windows. 1.2's save there has only been compiled. That's for 2026101512024174 with the rest.
+	- Priority: High
+	- Opened: 20261015-161111
+	- Opened by: JC
+	- Parent ID: 2026101512024159
+	- Prereq IDs: 2026101516111033
+	- Related IDs: 2026101518385490, 2026101513330048
+	- Requirements:
+		- The same header over 1.2 and 2.0, told apart by what each `shcl.h` declares.
+		- Every shared case passes on all 3 versions.
+	- Progress log:
+		- 20261015: `shclw1.c` and `shclw2.c` are ports of Go's `shclw1` and `shclw2`, each a copy of the other with its differences. Go's `OneTarget`, `EachPaths`, and `FormatIn` are in the shared `shclw.c` and `info.c`. 1.2's save is a write of the wrapper's own, as in Go and Rust.
+		- All 33 shared cases run whole on all 3 versions. The API tests run on each, sanitized, plain, and as C++, with the 3.0-only ones split out. cicd lints, builds, and tests each version.
+		- On 1.2 and 2.0, reads, text, and edits keep their memory until the document is freed. Those versions have no call that gives it back. 200,000 reads kept about 67 MB. design.md says so.
+	- Decisions:
+		- A program on 1.2 or 2.0 sets `SHCLW_SHCL` to 1 or 2, since their `shcl.h` files define the same macros. With none the build stops and says to set it. A wrong one fails to compile, on a call only 2.0 declares. 3.0 needs none. That settles the open question in design.md, which moved to Decisions.
+		- 2.0's save goes through shcl's own atomic write, as Go's does. So `shclw2.c` won't build with `SHCL_NO_FILE_IO`, and says why.
+		- A write into a folder that doesn't exist is `IO` on 1.2 and 2.0 and `NotFound` on 3.0, as in Go and Rust. Logged as 2026101518385490.
+		- On 1.2 and 2.0 a name holding a NUL can't go in a C path, since those versions quote the NUL as it is. An edit through that path is refused.
+	- Note: 1.2's write in `shclw1.c` is the code 2026101513330048 would need for a build without shcl's file calls.
+	- Verified:
+		- The gate passes.
+		- Go and C gave the same output on 4,435 fuzz cases across the 3 versions, run by hand. Wiring C into the fuzzer is 2026101516111107.
+		- Each check failed with its rule taken out: the several-instances check, Format lines in a raw body, the 1.2 block's link, 2.0's lost-lines refusal, wildcard indexes in Each, Names over several instances, the float rule, Rewrites, 2.0's refusal to upgrade format 1, and 1.2's save keeping the mode and refusing what isn't a file.
+		- Each `shcl.h` with each `SHCLW_SHCL`, or none, compiles only with the right one, in C and C++.
+	- Note: no test reaches the temp file cleanup after a failed 1.2 save, since every failure that can be set up comes before the temp file exists.
+	- Branch: c-old
+	- Commit: c003a9f
+	- Test case: `make pick`, `test_save`, and the 1.2 and 2.0 sides of `test_errors`, `test_upgrade`, `test_info`, and `test_rewrites` in `source/c/tests/api_test.c`. The shared cases on all 3 versions through `cicd/c_cases.py`.
+	- Swept: every row of design.md's "evens out" table has a case or an API test that runs on C 1.2 and 2.0, but the 2.x upgrade refusal, which is 3.0's alone. Every call `shclw3.c` defines is in `shclw1.c` and `shclw2.c`, which each link checks. The notes in `shclw.h` and design.md that hold only on 3.0 now say so.
+	- Acceptance signoff: Waiting. The `SHCLW_SHCL` macro, and leaving the 1.2 and 2.0 memory growth as a documented limit, were choices.
+
 - PutSyntax doesn't read its value back
 	- ID: 2026101513330007
 	- Type: Bug
@@ -569,19 +605,6 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- shcl's C header has no version macro before 3.0, so 1.2 and 2.0 are told apart by what they declare.
 	- Progress log:
 		- 20261015: split into 5 parts, each its own item below. This closes when they do.
-
-- C: shcl 1.2 and 2.0
-	- ID: 2026101516111070
-	- Type: Feature
-	- Status: Queued
-	- Priority: High
-	- Opened: 20261015-161111
-	- Opened by: JC
-	- Parent ID: 2026101512024159
-	- Prereq IDs: 2026101516111033
-	- Requirements:
-		- The same header over 1.2 and 2.0, told apart by what each `shcl.h` declares.
-		- Every shared case passes on all 3 versions.
 
 - C: fuzz against Go
 	- ID: 2026101516111107
@@ -895,6 +918,21 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Opened by: JC
 	- Parent ID: 2026101512024159
 	- Note: Cobblevale compiles shcl in one file with `SHCL_NO_FILE_IO`, since the file calls pull in `windows.h`, adn writes files itself. Write would need its own code for that build.
+
+- Write into a folder that doesn't exist says IO on 1.2 and 2.0, and NotFound on 3.0
+	- ID: 2026101518385490
+	- Type: Bug
+	- Status: Queued
+	- Severity: Low
+	- Opened: 20261015-183854
+	- Opened by: JC
+	- Related IDs: 2026101516111070
+	- Steps to reproduce:
+		- Write a document to `no/such/dir/x.shcl`.
+	- Incorrect behavior: `ErrIO` on 1.2 and 2.0, and `ErrNotFound` on 3.0.
+	- Expected behavior: The same kind on every version.
+	- Reproduced: 20261015, in C on all 3 versions. In Go and Rust, read only: their 1.2 and 2.0 saves give every failure as `ErrIO`, and 3.0's turns shcl's not-found status into `ErrNotFound`.
+	- Note: C follows Go and Rust on each version for now, so the 3 languages agree. `test_errors` in `source/c/tests/api_test.c` pins it.
 
 - Commit and publish from cicd
 	- ID: 2026101512024171

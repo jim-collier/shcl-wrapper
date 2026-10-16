@@ -371,7 +371,8 @@ static shclw_kind drop_old(judge *j, lines *f, shclw_i_info info, bool stamp, bo
 			continue;
 		}
 		for (size_t i = start; i < end; i++) {
-			run[i] = !starts(trimmed(f, i), schema_head, "");
+			// The analyzer loses that a run ends within the lines.
+			run[i] = !starts(trimmed(f, i), schema_head, ""); // NOLINT(clang-analyzer-security.ArrayBound)
 		}
 		if (comments(j, f, run)) {
 			for (size_t i = start; i < end; i++) {
@@ -485,4 +486,70 @@ shclw_kind shclw_i_finish_info(const char *text, size_t len, shclw_i_info info, 
 	free(j.base);
 	free(f.v);
 	return kind == SHCLW_OK ? shclw_i_ok(err) : kind;
+}
+
+static bool contains(const char *text, size_t len, const char *word) {
+	size_t n = zlen(word);
+	for (size_t i = 0; i + n <= len; i++) {
+		const char *at = (const char *)memchr(text + i, word[0], len - n + 1 - i);
+		if (!at) {
+			return false;
+		}
+		i = (size_t)(at - text);
+		if (!memcmp(at, word, n)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+shclw_kind shclw_i_format_in(const char *text, size_t len, const shclw_i_info_edit *e, int64_t *format) {
+	*format = 0;
+	if (!text) {
+		return SHCLW_OK;
+	}
+	if (len >= 3 && !memcmp(text, "\xEF\xBB\xBF", 3)) {
+		text += 3;
+		len -= 3;
+	}
+	// Most files have none, and every open asks.
+	if (!contains(text, len, format_word)) {
+		return SHCLW_OK;
+	}
+	lines f = {NULL, 0, 0, "\n", false};
+	split(&f, text, len);
+	judge j = {e, NULL, 0, f.oom};
+	if (!j.oom) {
+		j.base = e->values(text, len, &j.base_n);
+		j.oom = !j.base;
+	}
+	bool *drop = j.oom ? NULL : flags(f.n);
+	j.oom = j.oom || !drop;
+	int64_t highest = 0;
+	for (size_t i = 0; i < f.n && !j.oom; i++) {
+		bool ok = false;
+		int64_t n = format_number(trimmed(&f, i), e->major, &ok);
+		if (!ok || n == 0) {
+			continue;
+		}
+		drop[i] = true;
+		bool counts = comments(&j, &f, drop);
+		drop[i] = false;
+		if (!counts) {
+			continue;
+		}
+		if (n >= e->major) {
+			highest = n;
+			break;
+		}
+		highest = n > highest ? n : highest;
+	}
+	free(drop);
+	free(j.base);
+	free(f.v);
+	if (j.oom) {
+		return SHCLW_ERR_NO_MEMORY;
+	}
+	*format = highest;
+	return SHCLW_OK;
 }

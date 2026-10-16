@@ -2,34 +2,45 @@
 # SPDX-License-Identifier: MIT
 #
 # Builds and tests the C wrapper. SHCL_DIR is the folder holding the shcl.h
-# to build against, and SHCL2_DIR the one with shcl 2.0's, which the 3.0
-# upgrade checks old files with. cicd/cicd.bash fetches the pinned ones.
+# to build against, and SHCLW_SHCL its version: 1, 2, or 3, the default.
+# 1.2's and 2.0's headers can't be told apart, so it has to be said. On 3.0,
+# SHCL2_DIR is the folder with shcl 2.0's, which the upgrade checks old files
+# with. cicd/cicd.bash fetches the pinned ones.
 #
-#   make SHCL_DIR=... SHCL2_DIR=... test     API tests: sanitized, plain, and built as C++
-#   make SHCL_DIR=... SHCL2_DIR=... drive    the sanitized shclw-drive, for the shared cases
-#   make SHCL_DIR=... SHCL2_DIR=... strict   compile only, with gcc-15 at C17
-#   make SHCL_DIR=... SHCL2_DIR=... lint     clang-tidy
+#   make SHCL_DIR=... [SHCLW_SHCL=1|2] [SHCL2_DIR=...] test     API tests: sanitized, plain, and built as C++
+#   make SHCL_DIR=... [SHCLW_SHCL=1|2] [SHCL2_DIR=...] drive    the sanitized shclw-drive, for the shared cases
+#   make SHCL_DIR=... [SHCLW_SHCL=1|2] [SHCL2_DIR=...] strict   compile only, with gcc-15 at C17
+#   make SHCL_DIR=... [SHCLW_SHCL=1|2] [SHCL2_DIR=...] lint     clang-tidy
+#   make SHCL1_DIR=... SHCL2_DIR=... SHCL3_DIR=... pick         a wrong SHCLW_SHCL fails to compile
 #   make format-check | format
 
+SHCLW_SHCL ?= 3
 SHCL_DIR ?=
 SHCL2_DIR ?=
-ifneq ($(filter-out format format-check clean,$(or $(MAKECMDGOALS),all)),)
+ifneq ($(filter-out format format-check clean pick,$(or $(MAKECMDGOALS),all)),)
 ifeq ($(SHCL_DIR),)
 $(error set SHCL_DIR to the folder with shcl.h)
 endif
-ifeq ($(SHCL2_DIR),)
+ifeq ($(filter 1 2 3,$(SHCLW_SHCL)),)
+$(error SHCLW_SHCL is 1, 2, or 3)
+endif
+ifeq ($(SHCLW_SHCL)$(SHCL2_DIR),3)
 $(error set SHCL2_DIR to the folder with shcl 2.0's shcl.h)
 endif
 endif
-OUT      ?= build
+# Each version in its own folder, since a change of shcl.h or SHCLW_SHCL
+# wouldn't rebuild an object made with the other.
+OUT      ?= build/v$(SHCLW_SHCL)
 CC       ?= gcc
 CXX      ?= g++
 CC15     ?= gcc-15
 
-LIB   := shclw.c info.c shclw3.c run.c
+LIB   := shclw.c info.c shclw$(SHCLW_SHCL).c run.c
+# 3.0 needs no SHCLW_SHCL, and the build leaves it out to show that.
+PICK  := $(if $(filter 3,$(SHCLW_SHCL)),,-DSHCLW_SHCL=$(SHCLW_SHCL))
 WARN  := -Wall -Wextra -Wpedantic -Wshadow -Wvla -Wconversion -Werror
-CFLAGS_ALL := -std=c11 -O1 -g $(WARN) -I. -I$(SHCL_DIR)
-CXXFLAGS_ALL := -std=c++20 -O1 -g -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Werror -I. -I$(SHCL_DIR)
+CFLAGS_ALL := -std=c11 -O1 -g $(WARN) $(PICK) -I. -I$(SHCL_DIR)
+CXXFLAGS_ALL := -std=c++20 -O1 -g -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Werror $(PICK) -I. -I$(SHCL_DIR)
 SAN   := -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
 # shcl is first-party in its own repo; here it's built as a program would.
 SHCL_FLAGS := -std=c11 -O1 -g -I$(SHCL_DIR)
@@ -42,7 +53,7 @@ V2_DEPS := shclw3_v2.h shclw3_v2_names.h $(SHCL2_DIR)/shcl.h
 
 FORMATTED := $(wildcard *.c *.h tests/*.c)
 
-.PHONY: all test drive strict lint names format format-check clean
+.PHONY: all test drive strict lint names pick format format-check clean
 all: test drive strict
 
 $(OUT)/asan $(OUT)/plain $(OUT)/cxx:
@@ -79,20 +90,23 @@ $(OUT)/cxx/%.o: %.c *.h $(SHCL_DIR)/shcl.h | $(OUT)/cxx
 $(OUT)/cxx/%.o: tests/%.c *.h $(SHCL_DIR)/shcl.h | $(OUT)/cxx
 	$(CXX) -x c++ $(CXXFLAGS_ALL) -c $< -o $@
 
-objs = $(addprefix $(OUT)/$(1)/,$(LIB:.c=.o) shclw3_v2.o)
+# Only 3.0 has shcl 2.0 built in beside it.
+IS3  := $(filter 3,$(SHCLW_SHCL))
+objs = $(addprefix $(OUT)/$(1)/,$(LIB:.c=.o) $(if $(IS3),shclw3_v2.o))
+impl = $(OUT)/$(1)/shcl_impl.o $(if $(IS3),$(OUT)/$(1)/shclw3_v2_impl.o)
 
-$(OUT)/shclw-drive: $(call objs,asan) $(OUT)/asan/shclw-drive.o $(OUT)/asan/shcl_impl.o $(OUT)/asan/shclw3_v2_impl.o
+$(OUT)/shclw-drive: $(call objs,asan) $(OUT)/asan/shclw-drive.o $(call impl,asan)
 	$(CC) $(SAN) $^ -lm -o $@
-$(OUT)/api-test-asan: $(call objs,asan) $(OUT)/asan/api_test.o $(OUT)/asan/shcl_impl.o $(OUT)/asan/shclw3_v2_impl.o
+$(OUT)/api-test-asan: $(call objs,asan) $(OUT)/asan/api_test.o $(call impl,asan)
 	$(CC) $(SAN) $^ -lm -o $@
-$(OUT)/api-test-plain: $(call objs,plain) $(OUT)/plain/api_test.o $(OUT)/plain/shcl_impl.o $(OUT)/plain/shclw3_v2_impl.o
+$(OUT)/api-test-plain: $(call objs,plain) $(OUT)/plain/api_test.o $(call impl,plain)
 	$(CC) $^ -lm -o $@
-$(OUT)/api-test-cxx: $(call objs,cxx) $(OUT)/cxx/api_test.o $(OUT)/plain/shcl_impl.o $(OUT)/plain/shclw3_v2_impl.o
+$(OUT)/api-test-cxx: $(call objs,cxx) $(OUT)/cxx/api_test.o $(call impl,plain)
 	$(CXX) $^ -lm -o $@
 
 drive: $(OUT)/shclw-drive
 
-test: names $(OUT)/api-test-asan $(OUT)/api-test-plain $(OUT)/api-test-cxx
+test: $(if $(IS3),names) $(OUT)/api-test-asan $(OUT)/api-test-plain $(OUT)/api-test-cxx
 	$(OUT)/api-test-asan
 	$(OUT)/api-test-plain
 	$(OUT)/api-test-cxx
@@ -103,17 +117,36 @@ names: $(OUT)/plain/shclw3_v2.o $(OUT)/plain/shclw3_v2_impl.o
 	@if nm -g --defined-only $^ | grep -E ' _?shcl_'; then echo "shcl 2.0 names not in shclw3_v2_names.h" >&2; exit 1; fi
 
 strict:
-	$(CC15) -std=c17 $(WARN) -I. -I$(SHCL_DIR) -fsyntax-only $(LIB) shclw-drive.c tests/api_test.c
-	$(CC15) -std=c17 $(WARN) -I. -I$(SHCL2_DIR) -fsyntax-only shclw3_v2.c
+	$(CC15) -std=c17 $(WARN) $(PICK) -I. -I$(SHCL_DIR) -fsyntax-only $(LIB) shclw-drive.c tests/api_test.c
+	$(if $(IS3),$(CC15) -std=c17 $(WARN) -I. -I$(SHCL2_DIR) -fsyntax-only shclw3_v2.c)
 
 lint:
-	clang-tidy --quiet $(LIB) shclw-drive.c tests/api_test.c -- -std=c11 -I. -I$(SHCL_DIR)
-	clang-tidy --quiet shclw3_v2.c -- -std=c11 -I. -I$(SHCL2_DIR)
+	clang-tidy --quiet $(LIB) shclw-drive.c tests/api_test.c -- -std=c11 $(PICK) -I. -I$(SHCL_DIR)
+	$(if $(IS3),clang-tidy --quiet shclw3_v2.c -- -std=c11 -I. -I$(SHCL2_DIR))
+
+# Each shcl.h with each SHCLW_SHCL, or none, in C and C++: only the right one
+# compiles. 1.2's and 2.0's headers define the same macros, so a wrong pick
+# has to fail on what they declare.
+PICKS := 1:1:ok 1:2:no 1:3:no 1:none:no 2:2:ok 2:1:no 2:3:no 2:none:no 3:none:ok 3:3:ok 3:1:no 3:2:no
+pick_field = $(word $(1),$(subst :, ,$(2)))
+define pick_one
+	@if $(1) -fsyntax-only -I. -I$(SHCL$(call pick_field,1,$(2))_DIR) \
+		$(if $(filter none,$(call pick_field,2,$(2))),,-DSHCLW_SHCL=$(call pick_field,2,$(2))) tests/pick.c 2>/dev/null; \
+		then got=ok; else got=no; fi; \
+	if [ "$$got" != $(call pick_field,3,$(2)) ]; then \
+		echo "shcl.h $(call pick_field,1,$(2)) with SHCLW_SHCL $(call pick_field,2,$(2)): $$got" >&2; exit 1; fi
+
+endef
+pick:
+	$(if $(and $(SHCL1_DIR),$(SHCL2_DIR),$(SHCL3_DIR)),,$(error set SHCL1_DIR, SHCL2_DIR, and SHCL3_DIR))
+	$(foreach p,$(PICKS),$(call pick_one,$(CC) -std=c11 $(WARN),$(p)))
+	$(foreach p,$(PICKS),$(call pick_one,$(CXX) -x c++ -std=c++20 $(WARN),$(p)))
 
 format:
 	clang-format -i $(FORMATTED)
 format-check:
 	clang-format --dry-run -Werror $(FORMATTED)
 
+# The default OUT is a folder per version under build.
 clean:
-	rm -rf -- $(OUT)
+	rm -rf -- $(if $(filter build/v%,$(OUT)),build,$(OUT))

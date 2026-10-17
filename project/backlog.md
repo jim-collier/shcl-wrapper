@@ -881,38 +881,24 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 	- Opened by: JC
 	- Related IDs: 2026101619042485, 2026101512024159
 	- Requirements:
-		- Every full run builds the whole test suite with AddressSanitizer, LeakSanitizer, and UndefinedBehaviorSanitizer, in a build dir of its own.
+		- Every full run builds the C++ test build with AddressSanitizer, LeakSanitizer, and UndefinedBehaviorSanitizer, in a build dir of its own. shcl's own code in it is built sanitized too.
 			- Any report fails the test that made it.
 			- The suppressions file lists third-party libraries only, matched by library name. A leak in our code is fixed. If the fix has to wait, it gets a backlog item, and the test that shows it turns leak detection off with that item's ID beside it.
 			- For a full leak stack, rerun the test with `ASAN_OPTIONS=fast_unwind_on_malloc=0`.
-			- The same build turns on the standard library's checked mode. That's `-D_GLIBCXX_ASSERTIONS` on libstdc++, or `_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE` on libc++. Both keep the ABI.
-			- If the code has its own pool or arena allocator, the sanitizer build gets a switch that sends it straight to `new` and `delete`. ASan can't see inside a pool.
-			- On a GLib or GTK project, set `G_SLICE=always-malloc` and `G_DEBUG=gc-friendly`, or GLib hides blocks from the leak check.
-		- If the code starts threads, every full run also builds the tests with ThreadSanitizer, in another build dir. Its reports fail the test the same way.
-		- Every full run also runs the clang static analyzer and clang-tidy over every first-party .cpp file, from the build's `compile_commands.json`. Vendored code is left out.
-			- clang-tidy runs at least the `clang-analyzer-*` and `bugprone-*` checks, with `-header-filter` matching our own headers.
-			- gcc's `-fanalyzer` isn't used on C++. gcc's own docs still say it's meant for C. Any .c files in the project still get it.
+		- Every full run also runs clang-tidy over the C files as C++, with the C++ build's flags and the same `.clang-tidy`. That covers the clang analyzer and the `bugprone-*` checks.
+			- gcc's `-fanalyzer` isn't used on C++. gcc's own docs still say it's meant for C. The C item runs it on the same files.
 			- Before the gate goes live, every existing finding is fixed, or suppressed at the line with `NOLINT(check-name)` and a one-line reason. There's no baseline file.
-			- They move behind a flag only if a full run measures too slow.
-		- A `--leakcheck` flag adds the slow checks:
-			- CodeQL, from a pinned CLI run locally. No hosted service.
-			- The clang analyzer in cross-file (CTU) mode, so it follows calls across .cpp files.
-			- A heaptrack soak test. It loops through the program's main actions headless, and fails if the heap at round 2N is larger than at round N by more than a set margin. The heaptrack report is kept as a pipeline artifact.
-			- A libstdc++ debug build with `-D_GLIBCXX_DEBUG`, which catches bad iterators and out-of-range access that the assertions mode lets by.
-		- Coverity Scan and Infer aren't used. Coverity uploads the build to a third party.
-		- Every tool is pinned and runs in the build container or lint image, never installed on the host.
-		- Each new gate is watched to fail before it's trusted: plant a leak, a null dereference, a use after a vector grows, a data race if TSan runs, and a loop that grows the heap, and see each one go red.
+			- It moves behind a flag only if a full run measures too slow.
+		- Tools follow the C item's rules: pinned, and no Coverity or Infer.
+		- Each new gate is watched to fail before it's trusted: plant a leak and a null dereference that only the C++ build compiles, and see each one go red.
 		- Traps:
-			- clang-tidy exits 0 on warnings unless it's run with `-warnings-as-errors='*'`. `scan-build` exits 0 on findings unless it's run with `--status-bugs`.
-			- clang-tidy reports nothing in headers by default. In C++ a lot of the code lives in headers, so `-header-filter` has to name ours.
-			- Without `compile_commands.json` clang-tidy guesses the flags, misses defines and include paths, and checks the wrong code without failing.
-			- A template no first-party .cpp file instantiates is never analyzed. Header-only code needs a test that instantiates it.
-			- `_GLIBCXX_DEBUG` changes the ABI. Every C++ file and every linked C++ library has to be built with it, so it gets its own build dir.
-			- `-D_GLIBCXX_SANITIZE_VECTOR` lets ASan catch reads past a vector's size but inside its capacity. It gives false reports when any linked C++ code was built without it, so leave it off when prebuilt C++ libraries are in the mix.
-			- ASan and TSan can't share a build, and heaptrack can't share one with either. The soak test uses a plain build.
-			- UBSan's `vptr` check needs RTTI. A `-fno-rtti` build loses it.
-			- ASan's allocator hides the heap from glibc's own stats, such as `mallinfo2`. A test that reads them should exit as skipped under ASan, not pass.
-	- Note: The repo has no .cpp files. Its only C++ is the Makefile building the C files and tests as C++ with `g++ -x c++`, to prove `shclw.h` works from C++. That build isn't sanitized today. So this item covers that build, not a C++ code base.
+			- clang-tidy exits 0 on warnings unless `WarningsAsErrors` is set. `.clang-tidy` has `'*'`, and that has to stay.
+			- `.clang-tidy`'s `HeaderFilterRegex` already matches shclw's own headers. Without it clang-tidy reports nothing in them.
+			- ASan's allocator hides the heap from glibc's own stats, such as `mallinfo2`. `api_test.c` skips those checks under `UNDER_ASAN`, which g++ sets the same way. The C++ ASan run should show them as skipped.
+	- Decisions:
+		- 20261017, JC: only what fits here. The repo has no .cpp files. Its C++ is the Makefile building the C files and tests as C++, to prove `shclw.h` works from C++.
+		- Left out: the standard library's checked and debug modes, ThreadSanitizer, the pool and GLib switches, template and RTTI traps, and `compile_commands.json`. The code uses no C++ library, threads, pools, templates, or classes, and the Makefile passes clang-tidy its flags itself.
+		- Left to the C item: CodeQL, the cross-file analyzer, and the heaptrack soak. They'd check the same code again.
 
 - Write into a folder that doesn't exist says IO on 1.2 and 2.0, and NotFound on 3.0
 	- ID: 2026101518385490

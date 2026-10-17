@@ -814,6 +814,7 @@ Other projects are named here by stand-in names. The [project name map](../../pr
 		- Pin 3.0 dev until `v3.0.0-beta1` is tagged, then pin the tag.
 		- Programs move old files through the wrapper's upgrade, in place of their own upgrade code.
 		- The upgrade, with its 2.0 check, is part of every build. Each program moves its old files forward.
+		- Open upgrades an old file in memory. A file that fails the 2.0 check is `ErrRefused`. The first Write backs up the original before replacing it, and a program that only reads never writes. `UpgradeFile` stays for converting ahead of time.
 		- It covers 1.2 and 2.0 files as the existing programs wrote them. Wovenshell's released betas wrote 1.2.
 		- Test cases from real files each program wrote.
 		- Tallowbase, Mossrealm, and Lenscart move to 3.0 as they move onto the wrapper.
